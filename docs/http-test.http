@@ -1,0 +1,19 @@
+### health
+GET http://localhost:8787/api/leads/next
+
+### ingest sample
+POST http://localhost:8787/api/leads/import/csv
+Content-Type: application/json
+
+{
+  "csv": "{{file:../docs/leads.sample.csv}}"
+}
+
+### approve
+POST http://localhost:8787/api/approvals/approve
+Content-Type: application/json
+
+{}
+
+### next for send
+GET http://localhost:8787/api/outreach/queue

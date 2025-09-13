@@ -1,0 +1,45 @@
+/* Theme */
+body { background:#000; color:#FFD700; margin:0; font-family: Arial, sans-serif; }
+a { color:#FFD700; text-decoration:none; }
+a:hover { text-decoration:underline; }
+
+button, .btn {
+  background:#135c2a; color:#FFD700; border:1px solid rgba(255,215,0,.5);
+  padding:8px 14px; border-radius:10px; cursor:pointer; text-transform:uppercase;
+  font-weight:800; letter-spacing:.3px;
+}
+button:hover, .btn:hover { filter:brightness(1.06); }
+
+input, select, textarea {
+  color:#111; background:#fff; border:1px solid rgba(255,215,0,.4);
+  border-radius:6px; padding:8px 10px;
+}
+
+.card { background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.15); border-radius:12px; }
+.app-shell { padding:20px; }
+
+/* Top bar (simplified + mobile) */
+.topbar {
+  position:sticky; top:0; z-index:50;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:10px 12px; background:rgba(12,12,12,.85); backdrop-filter: blur(6px);
+  border-bottom:1px solid rgba(255,255,255,.08);
+}
+.topbar .brand { font-weight:900; letter-spacing:.8px; }
+
+.hamburger { display:none; font-size:22px; background:none; border:0; color:#FFD700; cursor:pointer; }
+.nav { display:flex; gap:8px; align-items:center; }
+.nav a { padding:6px 10px; border-radius:999px; border:1px solid rgba(255,215,0,.35); }
+.nav a.active { background:#FFD700; color:#111; border-color:#FFD700; }
+
+/* Tables on small screens */
+table { width:100%; }
+
+@media (max-width: 760px) {
+  .hamburger { display:block; }
+  .nav { display:none; position:absolute; left:0; right:0; top:54px; background:#0f0f0f; padding:10px; border-bottom:1px solid rgba(255,255,255,.08); }
+  .nav.open { display:grid; grid-auto-rows:min-content; }
+  .card { padding:10px !important; }
+  table { display:block; overflow-x:auto; }
+  input, select, button { font-size:16px; } /* prevent iOS zoom */
+}

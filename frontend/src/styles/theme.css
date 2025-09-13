@@ -1,0 +1,206 @@
+:root{
+  --bg:#000000;
+  --text:#D4AF37;         /* gold */
+  --gold:#D4AF37;
+  --green:#1f4d2c;        /* dark green */
+  --green-2:#2d6a3f;      /* hover/border */
+  --panel:#0b0b0b;        /* card bg */
+  --muted:#9a9a9a;
+}
+
+html,body,#root{ height:100%; background:var(--bg); color:var(--text); }
+body{ font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+
+.brand { font-family: Cinzel, serif; font-weight:700; letter-spacing:.5px; }
+
+.topbar{
+  display:flex; align-items:center; gap:16px;
+  padding:12px 18px; border-bottom:1px solid var(--green-2);
+  background:linear-gradient(180deg, #0b0b0b 0%, #050505 100%);
+}
+
+.topnav a{
+  text-decoration:none; color:var(--text);
+  padding:8px 12px; border-radius:6px; font-weight:600;
+  border:1px solid var(--green-2);
+}
+.topnav a.active{ background:var(--green); }
+.topnav a:hover{ background:var(--green-2); }
+
+.card{
+  background:var(--panel); border:1px solid var(--green-2);
+  border-radius:10px; padding:16px;
+}
+
+.btn{
+  display:inline-flex; align-items:center; gap:8px;
+  padding:8px 14px; border-radius:8px; border:1px solid var(--green-2);
+  background:transparent; color:var(--text); font-weight:700;
+  cursor:pointer; user-select:none;
+}
+.btn--green{ background:var(--green); }
+.btn:hover{ filter:brightness(1.1); }
+.btn:disabled{ opacity:.6; cursor:not-allowed; }
+
+.kpi{ border:1px solid var(--green-2); border-radius:10px; padding:14px 16px; }
+.kpi small{ color:var(--muted); display:block; margin-bottom:6px; }
+.kpi strong{ font-size:22px; }
+
+.footer{
+  padding:10px 18px; border-top:1px solid var(--green-2);
+  display:flex; justify-content:flex-end; opacity:.8; font-size:12px;
+}
+
+/* Stronger default button styling (wins over many libs) */
+button,
+input[type="button"],
+input[type="submit"],
+.btn {
+  background-color: var(--green) !important;
+  color: var(--gold) !important;
+  border: 1px solid var(--gold) !important;
+  padding: 8px 14px !important;
+  border-radius: 6px !important;
+  cursor: pointer !important;
+  font-family: 'Cinzel', serif !important;
+  font-weight: 700 !important;
+}
+
+/* Hover state */
+button:hover,
+input[type="button"]:hover,
+input[type="submit"]:hover,
+.btn:hover {
+  background-color: var(--gold) !important;
+  color: var(--bg) !important;
+}
+
+/* Optional: pill style for the top-nav-looking chips */
+.btn-royal {
+  background-color: var(--green) !important;
+  border: 1px solid var(--gold) !important;
+  color: var(--gold) !important;
+  padding: 8px 14px !important;
+  border-radius: 20px !important;
+}
+.btn-royal:hover {
+  background-color: var(--gold) !important;
+  color: var(--bg) !important;
+}
+
+/* ----- Header layout ----- */
+.er-header {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255,215,0,.25);
+  background: linear-gradient(180deg, rgba(0,0,0,.6), rgba(0,0,0,.2));
+}
+
+.er-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.er-logo {
+  height: 40px;
+  width: 40px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 6px rgba(0,0,0,.6));
+}
+
+.er-title {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  color: var(--gold);
+  text-shadow: 0 0 10px rgba(255,215,0,.1);
+}
+
+/* Center tabs */
+.er-tabs {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Reset link look and make pills */
+.er-tabs a {
+  text-decoration: none !important;
+  background-color: var(--green);
+  color: var(--gold);
+  border: 1px solid var(--gold);
+  padding: 8px 14px;
+  border-radius: 22px;
+  font-family: 'Cinzel', serif;
+  font-weight: 700;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  transition: transform .05s ease, background-color .15s ease, color .15s ease;
+}
+
+.er-tabs a:hover {
+  background-color: var(--gold);
+  color: var(--bg);
+  transform: translateY(-1px);
+}
+
+/* Active tab */
+.er-tabs a.active {
+  background-color: var(--gold);
+  color: var(--bg);
+  box-shadow: 0 0 0 2px rgba(255,215,0,.2);
+}
+
+/* Right side text */
+.er-powered {
+  justify-self: end;
+  font-size: 12px;
+  color: var(--gold);
+  opacity: .85;
+}
+
+/* Main area spacer */
+.er-main {
+  padding: 18px;
+}
+
+/* Make any plain links look like tabs if needed */
+a.btn-royal {
+  text-decoration: none !important;
+  background-color: var(--green) !important;
+  color: var(--gold) !important;
+  border: 1px solid var(--gold) !important;
+  padding: 8px 14px !important;
+  border-radius: 20px !important;
+  font-family: 'Cinzel', serif !important;
+  font-weight: 700 !important;
+}
+
+/* Buttons already set earlier; ensure consistency */
+button,
+input[type="button"],
+input[type="submit"],
+.btn {
+  background-color: var(--green) !important;
+  color: var(--gold) !important;
+  border: 1px solid var(--gold) !important;
+  padding: 8px 14px !important;
+  border-radius: 6px !important;
+  cursor: pointer !important;
+  font-family: 'Cinzel', serif !important;
+  font-weight: 700 !important;
+}
+
+button:hover,
+input[type="button"]:hover,
+input[type="submit"]:hover,
+.btn:hover {
+  background-color: var(--gold) !important;
+  color: var(--bg) !important;
+}

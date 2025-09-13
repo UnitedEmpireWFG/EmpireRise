@@ -1,0 +1,111 @@
+// frontend/src/App.jsx
+import { NavLink, Outlet } from "react-router-dom";
+
+// FORCE asset handling even if the file used to be .PNG or in a weird path:
+import logoUrl from "./assets/ue-logo.png?url";
+
+// ---- brand palette (kept minimal) ----
+const colors = {
+  bg:        "#000000",
+  bgGradA:   "rgba(0,20,0,.72)",
+  bgGradB:   "rgba(0,15,0,.55)",
+  gold:      "rgb(255,215,0)",
+  goldSoft:  "rgba(255,215,0,.65)",
+  greenA:    "rgba(12,64,12,.85)",
+  greenB:    "rgba(12,64,12,.65)",
+  card:      "rgba(255,255,255,.06)",
+  stroke:    "rgba(255,255,255,.15)",
+  text:      "#f5f5f5"
+};
+
+export default function App() {
+  return (
+    <div style={{
+      minHeight: "100vh",
+      background: `linear-gradient(180deg, ${colors.bgGradA}, ${colors.bgGradB})`,
+      color: colors.text
+    }}>
+      {/* Top bar (single brand block) */}
+
+<header style={{
+  background: "#000",
+  color: "#d4af37",
+  padding: "10px 20px",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  borderBottom: "1px solid #444"
+}}>
+  {/* Left: Logo + Brand */}
+  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+    <img src="/ue-logo.png" alt="Logo" style={{ height: "40px" }} />
+    <h1 style={{ margin: 0, fontFamily: "serif", fontWeight: "bold", fontSize: "20px" }}>
+      EMPIRE RISE
+    </h1>
+  </div>
+
+  {/* Center: Nav Tabs */}
+  <nav style={{ display: "flex", gap: "15px" }}>
+    <NavLink to="/" style={{ textDecoration: "none", color: "#d4af37", fontWeight: "bold" }}>
+      Dashboard
+    </NavLink>
+    <NavLink to="/approvals" style={{ textDecoration: "none", color: "#d4af37", fontWeight: "bold" }}>
+      Approvals
+    </NavLink>
+    <NavLink to="/queue" style={{ textDecoration: "none", color: "#d4af37", fontWeight: "bold" }}>
+      Queue
+    </NavLink>
+    <NavLink to="/leads" style={{ textDecoration: "none", color: "#d4af37", fontWeight: "bold" }}>
+      Leads
+    </NavLink>
+    <NavLink to="/settings" style={{ textDecoration: "none", color: "#d4af37", fontWeight: "bold" }}>
+      Settings
+    </NavLink>
+  </nav>
+
+  {/* Right: Powered By */}
+  <div style={{ fontSize: "12px", fontStyle: "italic", color: "#d4af37" }}>
+    Powered By A SmartBass
+  </div>
+</header>
+
+      {/* Page content */}
+      <main style={{ padding: 16, maxWidth: 1200, margin: "0 auto" }}>
+        <Outlet />
+      </main>
+
+      <footer style={{
+        fontSize: 12,
+        opacity: .75,
+        padding: "8px 16px",
+        borderTop: `1px solid ${colors.stroke}`
+      }}>
+        Powered By <span style={{ color: colors.gold }}>A SmartBass</span>
+      </footer>
+
+      {/* Local styles for pills & cards (keeps your existing page buttons untouched) */}
+      <style>{`
+        a.pill {
+          display:inline-block;
+          padding:8px 14px;
+          border-radius:999px;
+          border:1px solid ${colors.goldSoft};
+          color:${colors.gold};
+          text-decoration:none;
+          background:linear-gradient(180deg, ${colors.greenA}, ${colors.greenB});
+          font-weight:700;
+          letter-spacing:.3px;
+        }
+        a.pill.active {
+          background:${colors.gold};
+          color:#000;
+        }
+        .card {
+          background:${colors.card};
+          border:1px solid ${colors.stroke};
+          border-radius:12px;
+        }
+      `}</style>
+    </div>
+  );
+}

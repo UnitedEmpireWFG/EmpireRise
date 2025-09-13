@@ -1,0 +1,12 @@
+{
+  "name": "empire-rise",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "scripts": {
+    "backend": "node backend/server.js"
+  },
+  "dependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "timezone": "America/Toronto",
+  "quiet_hours": {
+    "start": "21:00",
+    "end": "08:00"
+  },
+  "platforms": {
+    "linkedin": {
+      "daily_msgs": 1
+    },
+    "instagram": {
+      "daily_msgs": 60
+    },
+    "facebook": {
+      "daily_msgs": 80,
+      "weekly_msgs": 400,
+      "min_gap_sec": 90,
+      "max_gap_sec": 300
+    },
+    "x": {
+      "daily_msgs": 80,
+      "weekly_msgs": 350,
+      "min_gap_sec": 90,
+      "max_gap_sec": 300
+    },
+    "threads": {
+      "daily_msgs": 60,
+      "weekly_msgs": 300,
+      "min_gap_sec": 120,
+      "max_gap_sec": 360
+    },
+    "tiktok": {
+      "daily_msgs": 40,
+      "weekly_msgs": 200,
+      "min_gap_sec": 180,
+      "max_gap_sec": 480
+    },
+    "reddit": {
+      "daily_msgs": 40,
+      "weekly_msgs": 200,
+      "min_gap_sec": 180,
+      "max_gap_sec": 480
+    },
+    "pinterest": {
+      "daily_msgs": 40,
+      "weekly_msgs": 200,
+      "min_gap_sec": 180,
+      "max_gap_sec": 480
+    },
+    "youtube": {
+      "daily_msgs": 30,
+      "weekly_msgs": 150,
+      "min_gap_sec": 240,
+      "max_gap_sec": 600
+    }
+  }
+}

@@ -1,0 +1,105 @@
+/* ===== EmpireRise Theme ===== */
+:root{
+  --bg:#0b0b0b;            /* black background */
+  --text:#d9c06b;          /* gold text */
+  --text-dim:#b6a456;
+  --muted:#8f7e3b;
+  --card:#121212;
+  --border:#262626;
+  --green:#164a2f;         /* deep green surfaces (buttons/cards) */
+  --green-2:#1e6a42;       /* hover */
+  --chip:#0f2f20;          /* small badges */
+  --danger:#ff6767;
+}
+
+html, body, #root{
+  height:100%;
+  background:var(--bg);
+  color:var(--text);
+  font-family: Inter, Roboto, system-ui, -apple-system, Segoe UI, Arial, sans-serif;
+}
+
+a{ color:var(--text); text-decoration:none; }
+a:hover{ opacity:.9; }
+
+.container{
+  max-width:1200px;
+  margin:0 auto;
+  padding:24px;
+}
+
+/* Cards */
+.card{
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:16px;
+}
+
+/* Buttons */
+button, .btn{
+  background:var(--green);
+  color:var(--text);
+  border:1px solid var(--border);
+  padding:10px 14px;
+  border-radius:10px;
+  cursor:pointer;
+}
+button:hover, .btn:hover{ background:var(--green-2); }
+button:disabled{ opacity:.55; cursor:not-allowed; }
+
+/* Inputs */
+input, select, textarea{
+  background:#0f0f0f;
+  color:var(--text);
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:8px 10px;
+}
+
+/* Top Nav Tabs */
+.topnav{
+  position:sticky; top:0; z-index:5;
+  background:linear-gradient(180deg, #0d0d0d, #0a0a0a);
+  border-bottom:1px solid var(--border);
+}
+.topnav-inner{
+  display:flex; align-items:center; gap:20px;
+  height:64px;
+}
+.brand{
+  display:flex; align-items:center; gap:12px; font-weight:800; letter-spacing:.5px;
+}
+.brand img{ height:40px; width:auto; display:block; }
+.tabs{ display:flex; gap:6px; margin-left:auto; }
+.tab{
+  padding:10px 14px; border-radius:10px;
+  background:transparent; border:1px solid transparent; color:var(--text);
+}
+.tab.active{ background:var(--green); border-color:var(--border); }
+.tab:hover{ background:#12281c; }
+
+/* Stat cards */
+.stat{
+  min-width:170px; padding:18px; border-radius:12px;
+  border:1px solid var(--border); background:var(--chip);
+}
+.stat .label{ color:var(--text-dim); font-size:13px; }
+.stat .value{ font-size:28px; font-weight:900; }
+
+/* Utility */
+.row{ display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+.grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(260px,1fr)); gap:12px; }
+
+/* Footer */
+.footer{
+  padding:22px 0; margin-top:24px;
+  border-top:1px solid var(--border);
+  color:var(--text-dim); font-size:13px;
+}
+
+/* Draft card bubble vibe */
+.draft-bubble{ background:#0e2016; border-color:#143523; }
+.preview{ white-space:pre-wrap; margin-top:6px; }
+.badge{ background:var(--chip); border:1px solid var(--border); padding:4px 8px; border-radius:999px; font-size:12px; color:var(--text); }
+.small-dim{ color:var(--text-dim); font-size:12px; }

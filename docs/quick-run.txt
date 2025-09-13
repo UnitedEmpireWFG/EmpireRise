@@ -1,0 +1,26 @@
+Backend
+1) Copy .env.example to .env and fill SUPABASE_URL, SUPABASE_SERVICE_ROLE
+2) Supabase SQL: run supabase/schema.sql and supabase/credentials.sql
+3) PowerShell:
+   cd Empire-Rise\backend
+   npm install
+   npm run dev
+   -> "EmpireRise API on 8787"
+
+Data smoke
+4) Import sample:
+   node scripts\import-csv.mjs docs\leads.sample.csv
+5) Approve:
+   node scripts\approve-all.mjs
+6) Next message:
+   node scripts\next-for-send.mjs
+
+Frontend
+7) cd Empire-Rise\frontend
+   npm install
+   npm run dev
+   Open http://localhost:5173
+
+Extension
+8) chrome://extensions -> Developer mode -> Load unpacked -> select Empire-Rise\extension
+   Pin -> Start

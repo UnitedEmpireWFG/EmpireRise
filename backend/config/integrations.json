@@ -1,0 +1,9 @@
+{
+  "linkedin":  { "mode": "browser" },
+  "instagram": { "mode": "browser" },
+  "facebook":  { "mode": "browser" },
+  "x":         { "mode": "browser" },
+  "threads":   { "mode": "browser" },
+  "tiktok":    { "mode": "browser" },
+  "reddit":    { "mode": "browser" }
+}
