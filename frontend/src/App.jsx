@@ -7,14 +7,14 @@ import Approvals from './pages/Approvals'
 import Queue from './pages/Queue'
 import Leads from './pages/Leads'
 import AssistLI from './pages/AssistLI'
-import Login from './pages/Login'          // ✅ you use Login.jsx
+import Login from './pages/Login'
+import Settings from './pages/Settings'   // ✅ ADD THIS
 
 // navbar
 import Navbar from './components/Navbar'
 
 export default function App() {
   const { ready, session } = useSession()
-
   if (!ready) return <div style={{ padding:24, color:'#ffd700' }}>Loading…</div>
 
   const Private = ({ children }) => (session ? children : <Navigate to="/login" replace />)
@@ -33,9 +33,9 @@ export default function App() {
           <Route path="/queue" element={<Private><Queue/></Private>} />
           <Route path="/leads" element={<Private><Leads/></Private>} />
           <Route path="/assist-li" element={<Private><AssistLI/></Private>} />
+          <Route path="/settings" element={<Private><Settings/></Private>} /> {/* ✅ protect and works */}
           {/* fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />
-          <Route path="/settings" element={<Settings/>} />
         </Routes>
       </main>
     </div>
