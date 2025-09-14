@@ -52,6 +52,8 @@ import threadsRouter from './routes/threads.js'
 import offersRouter from './routes/offers.js'
 import linkedinInbound from './routes/linkedin_inbound.js'
 import igDmRouter from './routes/ig_dm.js'
+import adminUsersRouter from './routes/admin_users.js'
+import { requireAdmin } from './middleware/auth.js'
 
 /* ===== LI/FB senders & pollers ===== */
 import { tickLinkedInSender } from './worker/li_dm_sender.js'
@@ -135,6 +137,7 @@ app.get('/auth/ping', (_req, res) => res.json({ ok:true }))
 /* ---------- AUTH WALL for /api/** ONLY ---------- */
 app.use(maybeBypass)
 app.use('/api', requireAuth)
+app.use('/api', requireAdmin, adminUsersRouter)
 
 /* ---------- PROTECTED MOUNTS (/api/...) ---------- */
 app.use('/api/meta', metaIds)

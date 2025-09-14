@@ -1,4 +1,5 @@
-import { Link, useLocation } from "react-router-dom"
+import { Link, useLocation, useNavigate } from "react-router-dom"
+import { supa } from "../lib/supa"  // uses your existing Supabase client
 
 const links = [
   { to: "/", label: "Dashboard" },
@@ -10,19 +11,30 @@ const links = [
 
 export default function Navbar() {
   const { pathname } = useLocation()
-  const logoUrl = `${import.meta.env.BASE_URL || '/'}ue-logo.png.PNG` // file lives in /public
+  const navigate = useNavigate()
 
+  // Your logo lives in /public as ue-logo.png.PNG
+  const logoUrl = `${import.meta.env.BASE_URL || '/'}ue-logo.png.PNG`
+
+  // inactive = green fill + gold text; active = gold fill + dark text
   const pill = (active) => ({
     padding: "6px 14px",
     borderRadius: 6,
     textDecoration: "none",
     border: "1px solid #ffd700",
     fontWeight: 700,
-    // inactive = green fill + gold text; active = gold fill + dark text
     background: active ? "#ffd700" : "#0e4d1b",
     color: active ? "#0c0c0c" : "#ffd700",
     boxShadow: "inset 0 0 0 1px rgba(0,0,0,.25)"
   })
+
+  const handleLogout = async () => {
+    try { await supa.auth.signOut() } catch {}
+    // clear any local/session storage just in case
+    localStorage.removeItem("er-auth")
+    sessionStorage.clear()
+    navigate("/login")
+  }
 
   return (
     <header style={{ background:"#0c0c0c", borderBottom:"1px solid rgba(255,215,0,.25)", padding:"10px 16px" }}>
@@ -30,10 +42,18 @@ export default function Navbar() {
         {/* Left: brand */}
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
           <img src={logoUrl} alt="EmpireRise logo" style={{ height:24 }} />
-          <span style={{ fontWeight:"bold", letterSpacing:1, color:"#ffd700" }}>EMPIRE RISE</span>
+          <span style={{
+            fontFamily: "'Cinzel', serif",
+            fontWeight: 700,
+            letterSpacing: 1,
+            color: "#ffd700",
+            fontSize: 20
+          }}>
+            EmpireRise
+          </span>
         </div>
 
-        {/* Center: pills (exact visual request) */}
+        {/* Center: pills */}
         <nav style={{ display:"flex", gap:10 }}>
           {links.map(l => {
             const active = pathname === l.to
@@ -45,8 +65,26 @@ export default function Navbar() {
           })}
         </nav>
 
-        {/* Right: tagline */}
-        <div style={{ fontSize:12, color:"#ffd700", opacity:.9 }}>Powered by A SmartBass</div>
+        {/* Right: tagline + logout */}
+        <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+          <div style={{ fontSize:12, color:"#ffd700", opacity:.9 }}>
+            Powered by A SmartBass
+          </div>
+          <button
+            onClick={handleLogout}
+            style={{
+              padding:"6px 12px",
+              border:"1px solid #ffd700",
+              borderRadius:6,
+              background:"#0e4d1b",
+              color:"#ffd700",
+              fontWeight:700,
+              cursor:"pointer"
+            }}
+          >
+            Logout
+          </button>
+        </div>
       </div>
     </header>
   )

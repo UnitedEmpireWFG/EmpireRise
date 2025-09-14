@@ -1,72 +1,55 @@
-import { useEffect, useState } from 'react'
-import { apiFetch } from '../lib/apiFetch'
-
-const shell = {
-  background: "rgba(255,215,0,0.08)",
-  border: "1px solid rgba(255,215,0,0.35)",
-  borderRadius: 10,
-  padding: 14
-}
-
-const statCard = {
-  border: "1px solid rgba(255,215,0,0.35)",
-  background: "rgba(0,0,0,0.35)",
-  borderRadius: 8,
-  padding: 14,
-  minWidth: 180
-}
-
-const statTitle = { fontSize: 12, opacity: .85, marginBottom: 6 }
-const statValue = { fontSize: 24, fontWeight: 800, lineHeight: 1 }
+/* frontend/src/pages/Dashboard.jsx */
+import { useEffect, useState } from "react"
+import { apiFetch } from "../lib/apiFetch"
 
 export default function Dashboard() {
-  const [data, setData] = useState(null)
-  const [err, setErr] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [data, setData] = useState({ sent:0, replies:0, qualified:0, booked:0 })
+  const [err, setErr] = useState("")
 
-  async function load() {
-    setBusy(true); setErr('')
-    try {
-      const j = await apiFetch('/api/dashboard')
-      if (!j?.ok) throw new Error(j?.error || 'failed')
-      setData(j)
-    } catch (e) {
-      setErr(String(e.message || e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    (async () => {
+      try {
+        const j = await apiFetch('/api/dashboard')
+        if (!j.ok) throw new Error(j.error || 'failed')
+        setData(j)
+      } catch (e) {
+        setErr(String(e.message || e))
+      }
+    })()
+  }, [])
 
   return (
-    <div style={{ display:"grid", gap:12 }}>
-      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-        <button className="btn" onClick={load} disabled={busy}>
-          {busy ? 'Refreshing…' : 'REFRESH'}
-        </button>
-        {err && <span style={{ color:"salmon" }}>{err}</span>}
+    <div style={{ display:"grid", gap:16 }}>
+      {err ? (
+        <div className="card" style={{ background:"#1f5f1f", border:"1px solid #ffd700", color:"#ffd700", padding:16 }}>
+          Error: {err}
+        </div>
+      ) : null}
+
+      {/* four small green cards */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:12 }}>
+        <StatCard title="Sent" value={data.sent} />
+        <StatCard title="Replies" value={data.replies} />
+        <StatCard title="Qualified" value={data.qualified} />
+        <StatCard title="Booked" value={data.booked} />
       </div>
 
-      <div style={shell}>
-        <div style={{ display:"flex", flexWrap:"wrap", gap:12 }}>
-          <Card title="Drafts"      value={data?.drafts ?? 0} />
-          <Card title="Queued"      value={data?.queued ?? 0} />
-          <Card title="Sent (30d)"  value={data?.sent ?? 0} />
-          <Card title="Replies (30d)" value={data?.replies ?? 0} />
-          <Card title="Bookings (30d)" value={data?.booked ?? 0} />
-          <Card title="Qualified (30d)" value={data?.qualified ?? 0} />
-        </div>
-      </div>
+      {/* remove the big card block entirely */}
     </div>
   )
 }
 
-function Card({ title, value }) {
+function StatCard({ title, value }) {
   return (
-    <div style={statCard}>
-      <div style={statTitle}>{title}</div>
-      <div style={statValue}>{value}</div>
+    <div className="card" style={{
+      background:"#1f5f1f",
+      border:"1px solid #ffd700",
+      color:"#ffd700",
+      borderRadius:8,
+      padding:16
+    }}>
+      <div style={{ fontSize:12, opacity:.85 }}>{title}</div>
+      <div style={{ fontSize:28, fontWeight:800 }}>{value}</div>
     </div>
   )
 }

@@ -1,36 +1,22 @@
-import { Router } from "express"
-import { supa } from "../db.js"
+import { Router } from 'express'
+import { supa } from '../db.js'
 
-const r = Router()
+const router = Router()
 
-// GET /api/queue  → items to send or recently sent
-r.get("/", async (_req, res) => {
+// GET /api/queue?limit=100
+router.get('/', async (req, res) => {
   try {
+    const limit = Math.min(300, Number(req.query.limit || 100))
     const { data, error } = await supa
-      .from("queue")
-      .select("*")
-      .order("scheduled_at", { ascending: true })
-      .limit(300)
+      .from('queue')
+      .select('*')
+      .order('scheduled_at', { ascending: true })
+      .limit(limit)
     if (error) throw error
-    res.json(data || [])
+    res.json({ ok: true, queue: data || [] })
   } catch (e) {
-    res.status(200).json({ ok: false, error: e.message || "load_failed" })
+    res.status(200).json({ ok: false, error: String(e.message || e) })
   }
 })
 
-// POST /api/queue/:id/mark-sent  → mark one sent (for Assist LI)
-r.post("/:id/mark-sent", async (req, res) => {
-  const id = req.params.id
-  try {
-    const { error } = await supa
-      .from("queue")
-      .update({ status: "sent", sent_at: new Date().toISOString() })
-      .eq("id", id)
-    if (error) throw error
-    res.json({ ok: true })
-  } catch (e) {
-    res.status(200).json({ ok: false, error: e.message || "update_failed" })
-  }
-})
-
-export default r
+export default router
