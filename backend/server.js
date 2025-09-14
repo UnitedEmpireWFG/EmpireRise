@@ -1,3 +1,11 @@
+import cors from "cors"
+
+app.use(cors({
+  origin: process.env.ORIGIN_APP,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"]
+}))
+
 /* backend/server.js */
 import 'dotenv/config'
 import express from 'express'

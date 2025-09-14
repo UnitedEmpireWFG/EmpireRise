@@ -1,25 +1,31 @@
 // backend/middleware/auth.js
-import 'dotenv/config'
-import * as jose from 'jose'
+import * as jose from "jose"
 
-// JWKS endpoint from Supabase (env SUPABASE_JWKS_URL = `${SUPABASE_URL}/auth/v1/keys`)
-const JWKS = jose.createRemoteJWKSet(new URL(process.env.SUPABASE_JWKS_URL))
+const JWKS = jose.createRemoteJWKSet(
+  new URL(process.env.SUPABASE_JWKS_URL)
+)
 
+// Core middleware
 export async function requireAuth(req, res, next) {
-  try {
-    const auth = req.headers.authorization || ''
-    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null
-    if (!token) throw new Error('missing_token')
+  const auth = req.headers.authorization || ""
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : null
 
-    // Validate signature; accept the standard Supabase audience
+  if (!token) {
+    return res.status(401).json({ ok: false, error: "no_token" })
+  }
+
+  try {
     const { payload } = await jose.jwtVerify(token, JWKS, {
-      audience: 'authenticated',     // <- important
-      // issuer check is optional for Supabase; omit to avoid mismatches
+      issuer: process.env.SUPABASE_URL + "/auth/v1",
     })
 
-    req.user = payload || {}
+    req.user = payload
     next()
-  } catch {
-    return res.status(401).json({ ok: false, error: 'unauthorized' })
+  } catch (e) {
+    console.error("JWT verify failed:", e.message)
+    return res.status(401).json({ ok: false, error: "unauthorized" })
   }
 }
+
+// Alias for compatibility (so requireUser also works if needed)
+export const requireUser = requireAuth
