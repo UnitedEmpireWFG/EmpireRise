@@ -3,7 +3,7 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import reqlog from './middleware/reqlog.js'
-import { maybeBypass, requireAuth, whoAmI } from './middleware/auth.js'
+import { allowOptions, maybeBypass, requireAuth, requireAdmin, whoAmI } from './middleware/auth.js'
 import { timePolicy } from './services/time_windows.js'
 
 /* ===== Smart sourcing (no keywords) ===== */
@@ -110,7 +110,6 @@ function isAllowedOrigin(origin) {
 }
 
 app.use((_, res, next) => { res.setHeader('Vary', 'Origin'); next() })
-
 app.use(cors({
   origin(origin, cb) { isAllowedOrigin(origin) ? cb(null, true) : cb(new Error(`cors_blocked ${origin || 'no_origin'}`)) },
   methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
@@ -118,17 +117,7 @@ app.use(cors({
   credentials: true,
   maxAge: 600
 }))
-
-// Preflight
-app.options('*', (req, res) => {
-  const origin = req.headers.origin || ''
-  if (!isAllowedOrigin(origin)) return res.status(403).end()
-  res.setHeader('Access-Control-Allow-Origin', origin)
-  res.setHeader('Access-Control-Allow-Credentials', 'true')
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type,x-app-key')
-  res.status(204).end()
-})
+app.use(allowOptions)
 
 /* ---------- body + req logging ---------- */
 app.use(express.json({ limit: '2mb' }))
@@ -151,7 +140,6 @@ app.get('/auth/whoami', whoAmI) // handy debug: shows verified JWT claims
 app.use(adminUsersRouter)
 
 /* ---------- PROTECTED MOUNTS ---------- */
-// Meta/LinkedIn/imports
 app.use('/api/meta', metaIds)
 app.use('/api/meta', meta)
 app.use('/api/import/meta', importMeta)
@@ -160,7 +148,6 @@ app.use('/api/linkedin', linkedinPost)
 app.use('/api/import/linkedin', importLinkedIn)
 app.use('/api', igDmRouter)
 
-// Core app
 app.use('/api/messages', messagesRoutes)
 app.use('/api/approvals', approvalsRoutes)
 app.use('/api/approvals', approvalsBulkRouter)
@@ -187,7 +174,6 @@ app.use('/api', threadsRouter)
 app.use('/api', offersRouter)
 app.use('/api', misc)
 
-// Extra routers
 app.use(liBatchRouter)
 app.use(queueBulkRouter)
 app.use(prospectsRouter)
@@ -226,7 +212,7 @@ app.listen(port, () => {
   console.log('Auth bypass:', String(process.env.AUTH_BYPASS||'false'))
   console.log('Work window policy:', timePolicy._cfg)
 
-  // Existing crons
+  // Crons
   startBirthdayCron()
   startFollowupsCron()
   startSourcingCron()
@@ -243,7 +229,7 @@ app.listen(port, () => {
   }
   safeInitLiBatch()
 
-  // Your existing DM senders & pollers
+  // Senders & pollers
   if (String(process.env.LI_SENDER_ENABLED || 'true') === 'true') {
     setInterval(() => tickLinkedInSender().catch(()=>{}), 45_000)
   }
@@ -259,15 +245,9 @@ app.listen(port, () => {
     setInterval(() => tickFacebookInboxPoller().catch(()=>{}), fbPollEvery * 1000)
   }
 
-  // NEW: smart discovery → connect → accept → auto-enqueue (all 3)
+  // Smart sourcing loops
   const minutes = (m) => m * 60 * 1000
-  setInterval(async () => {
-    try { await runDiscoveryLinkedInSmart(); await runConnectLinkedInSmart(); await checkLinkedInAcceptsSmart() } catch {}
-  }, minutes(Math.max(45, Number(process.env.SOURCING_TICK_MINUTES || 60))))
-  setInterval(async () => {
-    try { await runDiscoveryFacebookSmart(); await runConnectFacebookSmart(); await checkFacebookAcceptsSmart() } catch {}
-  }, minutes(Math.max(60, Number(process.env.SOURCING_TICK_MINUTES || 60))))
-  setInterval(async () => {
-    try { await runDiscoveryInstagramSmart(); await runConnectInstagramSmart(); await checkInstagramAcceptsSmart() } catch {}
-  }, minutes(Math.max(75, Number(process.env.SOURCING_TICK_MINUTES || 60))))
+  setInterval(async () => { try { await runDiscoveryLinkedInSmart(); await runConnectLinkedInSmart(); await checkLinkedInAcceptsSmart() } catch {} }, minutes(Math.max(45, Number(process.env.SOURCING_TICK_MINUTES || 60))))
+  setInterval(async () => { try { await runDiscoveryFacebookSmart(); await runConnectFacebookSmart(); await checkFacebookAcceptsSmart() } catch {} }, minutes(Math.max(60, Number(process.env.SOURCING_TICK_MINUTES || 60))))
+  setInterval(async () => { try { await runDiscoveryInstagramSmart(); await runConnectInstagramSmart(); await checkInstagramAcceptsSmart() } catch {} }, minutes(Math.max(75, Number(process.env.SOURCING_TICK_MINUTES || 60))))
 })
