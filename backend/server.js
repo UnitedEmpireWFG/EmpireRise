@@ -3,7 +3,7 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import reqlog from './middleware/reqlog.js'
-import { requireAuth } from './middleware/auth.js'
+import { maybeBypass, requireAuth } from './middleware/auth.js'
 import { timePolicy } from './services/time_windows.js'
 
 /* ===== Smart sourcing (no keywords) ===== */
@@ -43,7 +43,7 @@ import replies from './routes/replies.js'
 import timeline from './routes/timeline.js'
 import exportCsv from './routes/export_csv.js'
 import briefings from './routes/briefings.js'
-// import dashboardRoutes from './routes/dashboard.js' // using inline route below
+// import dashboardRoutes from './routes/dashboard.js' // keeping inline route below instead
 import calendlyRouter from './routes/calendly.js'
 import misc from './routes/misc_stub.js'
 import contextRoutes from './routes/context.js'
@@ -99,10 +99,13 @@ app.use((_, res, next) => {
   next()
 })
 
-/* ---------- public root & health (avoid 401s for pings) ---------- */
+/* ---------- PUBLIC ROOT & HEALTH (no auth) ---------- */
 app.head('/', (_req, res) => res.status(200).end())
 app.get('/', (_req, res) => res.type('text/plain').send('EmpireRise backend is live'))
 app.get('/healthz', (_req, res) => res.json({ ok: true, t: Date.now() }))
+
+/* ---------- OPTIONS short-circuit BEFORE anything ---------- */
+app.use(maybeBypass)
 
 /* ================== CORS (tight) ================== */
 const NETLIFY_ORIGIN = process.env.ORIGIN_APP || '' // e.g. https://empirerise.netlify.app
@@ -119,13 +122,13 @@ app.use((_, res, next) => { res.setHeader('Vary', 'Origin'); next() })
 
 app.use(cors({
   origin(origin, cb) { isAllowedOrigin(origin) ? cb(null, true) : cb(new Error(`cors_blocked ${origin || 'no_origin'}`)) },
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-app-key'],
+  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization','x-app-key'],
   credentials: true,
   maxAge: 600
 }))
 
-// Preflight
+// Preflight (explicit)
 app.options('*', (req, res) => {
   const origin = req.headers.origin || ''
   if (!isAllowedOrigin(origin)) return res.status(403).end()
@@ -140,7 +143,7 @@ app.options('*', (req, res) => {
 app.use(express.json({ limit: '2mb' }))
 app.use(reqlog)
 
-/* ---------------- PUBLIC ---------------- */
+/* ---------------- PUBLIC MOUNTS ---------------- */
 app.use('/api/health', health)
 app.use('/api/health/full', healthFull)
 app.use('/auth', auth)
@@ -149,7 +152,7 @@ app.use('/webhooks/meta', metaWebhooks)
 app.use('/webhooks/linkedin', linkedinInbound)
 app.use('/webhooks/calendly', calendlyRouter)
 
-/* ---------------- AUTH WALL ---------------- */
+/* ---------------- AUTH WALL (once) ---------------- */
 app.use(requireAuth)
 app.use(adminUsersRouter)
 
@@ -175,7 +178,7 @@ app.use('/api/leads', leadsRoutes)
 app.use('/api/leads', leadsAdd)
 app.use('/api/export', exportCsv)
 app.use('/api/briefings', briefings)
-// app.use('/api/dashboard', dashboardRoutes) // inline route below
+// app.use('/api/dashboard', dashboardRoutes) // keeping inline route below instead
 app.use('/api/settings', settingsRoutes)
 app.use('/api/context', contextRoutes)
 app.use('/api/app-settings', appSettings)
@@ -189,6 +192,7 @@ app.use('/api', threadsRouter)
 app.use('/api', offersRouter)
 app.use('/api', misc)
 
+// extra routers
 app.use(liBatchRouter)
 app.use(queueBulkRouter)
 app.use(prospectsRouter)
@@ -216,7 +220,7 @@ app.get('/api/dashboard', (req, res) => {
 app.use((err, _req, res, _next) => {
   const msg = err?.message || 'server_error'
   if (msg?.startsWith?.('cors_blocked')) return res.status(403).json({ ok: false, error: msg })
-  if (['unauthorized', 'Unauthorized', 'invalid_token'].includes(msg)) return res.status(401).json({ ok: false, error: 'unauthorized' })
+  if (['unauthorized','Unauthorized','invalid_token'].includes(msg)) return res.status(401).json({ ok: false, error: 'unauthorized' })
   res.status(200).json({ ok: false, error: msg })
 })
 
@@ -224,7 +228,7 @@ app.use((err, _req, res, _next) => {
 const port = process.env.PORT || 8787
 app.listen(port, () => {
   console.log(`EmpireRise API on ${port}`)
-  console.log('Work window policy:', timePolicy?._cfg || {})
+  console.log('Work window policy:', timePolicy?._cfg)
 
   // ===== Existing crons =====
   startBirthdayCron()
@@ -256,13 +260,14 @@ app.listen(port, () => {
     setInterval(() => tickFacebookSender().catch(()=>{}), 45_000)
   }
   if (String(process.env.FB_POLLER_ENABLED || 'true') === 'true') {
-    const fbPollEvery = Math.max(90, Number(process.env.FB_POLL_INTERVAL_SEC || 150))
+    const fbPollEvery = Math.max(90, Number(process.env.FB_POLLER_INTERVAL_SEC || process.env.FB_POLL_INTERVAL_SEC || 150))
     setInterval(() => tickFacebookInboxPoller().catch(()=>{}), fbPollEvery * 1000)
   }
 
   // ===== NEW: smart discovery → connect → accept → auto-enqueue (all 3) =====
   const minutes = (m) => m * 60 * 1000
 
+  // LinkedIn trickle
   setInterval(async () => {
     try {
       await runDiscoveryLinkedInSmart()
@@ -271,6 +276,7 @@ app.listen(port, () => {
     } catch {}
   }, minutes(Math.max(45, Number(process.env.SOURCING_TICK_MINUTES || 60))))
 
+  // Facebook trickle
   setInterval(async () => {
     try {
       await runDiscoveryFacebookSmart()
@@ -279,6 +285,7 @@ app.listen(port, () => {
     } catch {}
   }, minutes(Math.max(60, Number(process.env.SOURCING_TICK_MINUTES || 60))))
 
+  // Instagram trickle
   setInterval(async () => {
     try {
       await runDiscoveryInstagramSmart()
