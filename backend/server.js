@@ -2,19 +2,21 @@
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
+import cookieParser from 'cookie-parser'
+
 import reqlog from './middleware/reqlog.js'
 import { maybeBypass, requireAuth, requireAdmin } from './middleware/auth.js'
 import { timePolicy } from './services/time_windows.js'
 
-/* ===== Health/Auth ===== */
+/* ===== Health/Auth (PUBLIC) ===== */
 import health from './routes/health.js'
 import healthFull from './routes/health_full.js'
 import auth from './routes/auth.js'
 
-/* ===== Platforms, OAuth, webhooks (PUBLIC) ===== */
+/* ===== OAuth & Webhooks (PUBLIC) ===== */
 import oauthMeta from './routes/oauth_meta.js'
-import metaWebhooks from './routes/meta_webhooks.js'
 import oauthLinkedIn from './routes/oauth_linkedin.js'
+import metaWebhooks from './routes/meta_webhooks.js'
 import linkedinInbound from './routes/linkedin_inbound.js'
 
 /* ===== Platform APIs (PROTECTED) ===== */
@@ -91,6 +93,11 @@ app.use((_, res, next) => {
   next()
 })
 
+/* ---------- parsers & logs (before routes) ---------- */
+app.use(cookieParser())
+app.use(express.json({ limit: '2mb' }))
+app.use(reqlog)
+
 /* ---------- CORS (tight) ---------- */
 const NETLIFY_ORIGIN = (process.env.ORIGIN_APP || '').replace(/\/+$/,'') // e.g. https://empirerise.netlify.app
 const allowList = [ NETLIFY_ORIGIN, 'http://localhost:5173', 'http://localhost:8787' ].filter(Boolean)
@@ -117,17 +124,13 @@ app.options('*', (req, res) => {
   res.status(204).end()
 })
 
-/* ---------- body + logs ---------- */
-app.use(express.json({ limit: '2mb' }))
-app.use(reqlog)
-
 /* ---------- PUBLIC ---------- */
 app.get('/healthz', (_req, res) => res.json({ ok:true, t:Date.now() }))
 app.use('/api/health', health)
 app.use('/api/health/full', healthFull)
 app.use('/auth', auth)
 
-// OAuth/webhooks should be PUBLIC (redirects come without our token)
+// OAuth/webhooks are PUBLIC (redirects won’t have our token)
 app.use('/oauth/meta', oauthMeta)
 app.use('/oauth/linkedin', oauthLinkedIn)
 app.use('/webhooks/meta', metaWebhooks)
@@ -138,8 +141,8 @@ app.get('/', (_req, res) => res.json({ ok:true, name:'EmpireRise API' }))
 app.get('/auth/ping', (_req, res) => res.json({ ok:true }))
 
 /* ---------- AUTH WALL for /api/** ONLY ---------- */
-app.use(maybeBypass)               // harmless unless AUTH_BYPASS=true
-app.use('/api', requireAuth)       // protect everything under /api
+app.use(maybeBypass)          // no-op unless AUTH_BYPASS=true
+app.use('/api', requireAuth)  // protect everything under /api
 
 /* ---------- PROTECTED MOUNTS (/api/...) ---------- */
 app.use('/api/meta', metaIds)
@@ -175,10 +178,10 @@ app.use('/api', threadsRouter)
 app.use('/api', offersRouter)
 app.use('/api', misc)
 
-// ✅ Admin router — single mount, namespaced, protected
+// Admin router — single mount, namespaced, protected
 app.use('/api/admin', requireAdmin, adminUsersRouter)
 
-/* ---------- EXAMPLE protected endpoints ---------- */
+/* ---------- Example protected endpoints ---------- */
 app.get('/api/test/ai', async (_req, res) => {
   try { res.json({ ok:true, text: await aiComplete('Write a short friendly check in.') }) }
   catch (e) { res.status(200).json({ ok:false, error:e.message }) }
@@ -229,6 +232,7 @@ app.listen(port, () => {
     const liPollEvery = Math.max(60, Number(process.env.LI_POLL_INTERVAL_SEC || 120))
     setInterval(() => tickLinkedInInboxPoller().catch(()=>{}), liPollEvery * 1000)
   }
+
   if (String(process.env.FB_SENDER_ENABLED || 'true') === 'true') {
     setInterval(() => tickFacebookSender().catch(()=>{}), 45_000)
   }
