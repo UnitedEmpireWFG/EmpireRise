@@ -1,12 +1,3 @@
-import cors from "cors"
-
-app.use(cors({
-  origin: process.env.ORIGIN_APP,
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"]
-}))
-
-/* backend/server.js */
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
@@ -51,7 +42,6 @@ import replies from './routes/replies.js'
 import timeline from './routes/timeline.js'
 import exportCsv from './routes/export_csv.js'
 import briefings from './routes/briefings.js'
-// import dashboardRoutes from './routes/dashboard.js' // inline route below instead
 import calendlyRouter from './routes/calendly.js'
 import misc from './routes/misc_stub.js'
 import contextRoutes from './routes/context.js'
@@ -178,7 +168,6 @@ app.use('/api/leads', leadsRoutes)
 app.use('/api/leads', leadsAdd)
 app.use('/api/export', exportCsv)
 app.use('/api/briefings', briefings)
-// app.use('/api/dashboard', dashboardRoutes) // keeping inline route below instead
 app.use('/api/settings', settingsRoutes)
 app.use('/api/context', contextRoutes)
 app.use('/api/app-settings', appSettings)
@@ -227,7 +216,7 @@ app.use((err, _req, res, _next) => {
 const port = process.env.PORT || 8787
 app.listen(port, () => {
   console.log(`EmpireRise API on ${port}`)
-  console.log('Work window policy:', timePolicy._cfg)
+  console.log('Work window policy:', timePolicy?._cfg || '(not set)')
 
   // ===== Existing crons =====
   startBirthdayCron()
