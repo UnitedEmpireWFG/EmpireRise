@@ -2,8 +2,15 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import reqlog from './middleware/reqlog.js'
-import { maybeBypass, requireAuth, requireAdmin } from './middleware/auth.js'
+import { requireAuth, requireAdmin } from './middleware/auth.js'
 import { timePolicy } from './services/time_windows.js'
+
+/* ===== Smart sourcing (no keywords) ===== */
+import {
+  runDiscoveryLinkedInSmart, runConnectLinkedInSmart, checkLinkedInAcceptsSmart,
+  runDiscoveryFacebookSmart, runConnectFacebookSmart, checkFacebookAcceptsSmart,
+  runDiscoveryInstagramSmart, runConnectInstagramSmart, checkInstagramAcceptsSmart
+} from './worker/discovery_smart_all.js'
 
 /* ===== Health/Auth ===== */
 import health from './routes/health.js'
@@ -83,15 +90,15 @@ import { aiComplete } from './lib/ai.js'
 
 const app = express()
 
-/* ---------- keep-alive ---------- */
+/* ---------- keep-alive for proxies ---------- */
 app.use((_, res, next) => {
   res.setHeader('Connection', 'keep-alive')
   res.setHeader('Keep-Alive', 'timeout=5')
   next()
 })
 
-/* ---------- CORS (tight) ---------- */
-const NETLIFY_ORIGIN = (process.env.ORIGIN_APP || '').replace(/\/+$/,'') // e.g. https://empirerise.netlify.app
+/* ================== CORS (tight) ================== */
+const NETLIFY_ORIGIN = process.env.ORIGIN_APP || '' // e.g. https://empirerise.netlify.app
 const allowList = [ NETLIFY_ORIGIN, 'http://localhost:5173', 'http://localhost:8787' ].filter(Boolean)
 
 function isAllowedOrigin(origin) {
@@ -100,59 +107,52 @@ function isAllowedOrigin(origin) {
   try { if (new URL(origin).host.endsWith('.netlify.app')) return true } catch {}
   return false
 }
+
 app.use((_, res, next) => { res.setHeader('Vary', 'Origin'); next() })
 app.use(cors({
   origin(origin, cb) { isAllowedOrigin(origin) ? cb(null, true) : cb(new Error(`cors_blocked ${origin || 'no_origin'}`)) },
-  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS','HEAD'],
+  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
   allowedHeaders: ['Content-Type','Authorization','x-app-key'],
-  credentials: true, maxAge: 600
+  credentials: true,
+  maxAge: 600
 }))
-// Explicit preflight
 app.options('*', (req, res) => {
   const origin = req.headers.origin || ''
   if (!isAllowedOrigin(origin)) return res.status(403).end()
   res.setHeader('Access-Control-Allow-Origin', origin)
-  res.setHeader('Access-Control-Allow-Credentials','true')
-  res.setHeader('Access-Control-Allow-Methods','GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD')
-  res.setHeader('Access-Control-Allow-Headers','Authorization,Content-Type,x-app-key')
+  res.setHeader('Access-Control-Allow-Credentials', 'true')
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type,x-app-key')
   res.status(204).end()
 })
 
-/* ---------- body + logs ---------- */
+/* ---------- body + req logging ---------- */
 app.use(express.json({ limit: '2mb' }))
 app.use(reqlog)
 
-/* ---------- PUBLIC ---------- */
-// healthz for Render health checks
-app.get('/healthz', (_req, res) => res.json({ ok:true, t:Date.now() }))
-app.use('/api/health', health)       // your existing health routes
+/* ---------------- PUBLIC (NO AUTH) ---------------- */
+app.get('/healthz', (_req,res)=> res.json({ ok:true, t:Date.now() }))
+app.use('/api/health', health)
 app.use('/api/health/full', healthFull)
-app.use('/auth', auth)               // login helpers (public)
+app.use('/auth', auth)
 app.use('/oauth/meta', oauthMeta)
 app.use('/webhooks/meta', metaWebhooks)
 app.use('/webhooks/linkedin', linkedinInbound)
 app.use('/webhooks/calendly', calendlyRouter)
 
-// Simple public root (so HEAD / doesn’t trip auth)
-app.get('/', (_req, res) => res.json({ ok:true, name:'EmpireRise API' }))
+/* ---------------- AUTH WALL ---------------- */
+app.use(requireAuth)                 // <— everything below requires a valid Supabase JWT
+app.use(adminUsersRouter)            // uses requireAdmin internally
 
-// Diagnostic: whoami (protected below as /auth/whoami)
-app.get('/auth/ping', (_req, res) => res.json({ ok:true }))
-
-/* ---------- AUTH WALL for /api/** ONLY ---------- */
-app.use(maybeBypass)   // harmless if AUTH_BYPASS=false
-app.use('/api', requireAuth)   // <— IMPORTANT: scope auth to /api
-
-/* ---------- PROTECTED MOUNTS (/api/...) ---------- */
+/* --------------- PROTECTED MOUNTS --------------- */
 app.use('/api/meta', metaIds)
 app.use('/api/meta', meta)
 app.use('/api/import/meta', importMeta)
-app.use('/oauth/linkedin', oauthLinkedIn)       // if these should be protected, mount under /api as well
+app.use('/oauth/linkedin', oauthLinkedIn)
 app.use('/api/linkedin', linkedinPost)
 app.use('/api/import/linkedin', importLinkedIn)
 app.use('/api', igDmRouter)
 
-// feature routes
 app.use('/api/messages', messagesRoutes)
 app.use('/api/approvals', approvalsRoutes)
 app.use('/api/approvals', approvalsBulkRouter)
@@ -178,39 +178,42 @@ app.use('/api', templatesRouter)
 app.use('/api', threadsRouter)
 app.use('/api', offersRouter)
 app.use('/api', misc)
+app.use(liBatchRouter)
+app.use(queueBulkRouter)
+app.use(prospectsRouter)
+app.use(resolverRouter)
 
-// admin router expects requireAdmin exported
-app.use('/api', requireAdmin, adminUsersRouter)
-
-// convenience protected whoami
-app.get('/auth/whoami', requireAuth, (req, res) => {
-  res.json({ ok:true, user:req.user || null })
+/* ---------- AI smoke test (protected) ---------- */
+app.get('/api/test/ai', async (_req, res) => {
+  try { res.json({ ok: true, text: await aiComplete('Write a short friendly check in.') }) }
+  catch (e) { res.status(200).json({ ok: false, error: e.message }) }
 })
 
-/* ---------- SMOKE + DASH ---------- */
-app.get('/api/test/ai', requireAuth, async (_req, res) => {
-  try { res.json({ ok:true, text: await aiComplete('Write a short friendly check in.') }) }
-  catch (e) { res.status(200).json({ ok:false, error:e.message }) }
-})
-app.get('/api/dashboard', requireAuth, (req, res) => {
-  res.json({ ok:true, user: req.user?.email || req.user?.sub || null, sent:0, replies:0, qualified:0, booked:0 })
+/* ---------- Minimal /api/dashboard (protected) ---------- */
+app.get('/api/dashboard', (req, res) => {
+  res.json({
+    ok: true,
+    user: req.user?.email || req.user?.sub || null,
+    sent: 0, replies: 0, qualified: 0, booked: 0
+  })
 })
 
-/* ---------- ERRORS ---------- */
+/* ---------------- ERRORS ---------------- */
 app.use((err, _req, res, _next) => {
   const msg = err?.message || 'server_error'
-  if (msg?.startsWith?.('cors_blocked')) return res.status(403).json({ ok:false, error:msg })
-  if (['unauthorized','Unauthorized','invalid_token'].includes(msg)) return res.status(401).json({ ok:false, error:'unauthorized' })
-  res.status(200).json({ ok:false, error:msg })
+  if (msg?.startsWith?.('cors_blocked')) return res.status(403).json({ ok: false, error: msg })
+  if (['unauthorized','Unauthorized','invalid_token'].includes(msg)) return res.status(401).json({ ok: false, error: 'unauthorized' })
+  res.status(200).json({ ok: false, error: msg })
 })
 
-/* ---------- BOOT ---------- */
+/* ---------------- BOOT ---------------- */
 const port = process.env.PORT || 8787
 app.listen(port, () => {
   console.log(`EmpireRise API on ${port}`)
   console.log('Auth bypass:', String(process.env.AUTH_BYPASS || 'false'))
   console.log('Work window policy:', timePolicy._cfg)
 
+  // ===== Existing crons =====
   startBirthdayCron()
   startFollowupsCron()
   startSourcingCron()
@@ -220,12 +223,14 @@ app.listen(port, () => {
   startGhostNudgesCron()
   startABHousekeepingCron()
 
+  // LI daily batch initializer (safe retry)
   const safeInitLiBatch = () => {
     try { initLiDailyBatch(globalUserCache); console.log('liDailyBatch initialized') }
     catch (e) { console.log('initLiDailyBatch skipped:', e.message); setTimeout(safeInitLiBatch, 60_000) }
   }
   safeInitLiBatch()
 
+  // ===== DM senders & pollers =====
   if (String(process.env.LI_SENDER_ENABLED || 'true') === 'true') {
     setInterval(() => tickLinkedInSender().catch(()=>{}), 45_000)
   }
@@ -241,4 +246,16 @@ app.listen(port, () => {
     const fbPollEvery = Math.max(90, Number(process.env.FB_POLL_INTERVAL_SEC || 150))
     setInterval(() => tickFacebookInboxPoller().catch(()=>{}), fbPollEvery * 1000)
   }
+
+  // ===== smart discovery → connect → accept → auto-enqueue =====
+  const minutes = (m) => m * 60 * 1000
+  setInterval(async () => {
+    try { await runDiscoveryLinkedInSmart(); await runConnectLinkedInSmart(); await checkLinkedInAcceptsSmart() } catch {}
+  }, minutes(Math.max(45, Number(process.env.SOURCING_TICK_MINUTES || 60))))
+  setInterval(async () => {
+    try { await runDiscoveryFacebookSmart(); await runConnectFacebookSmart(); await checkFacebookAcceptsSmart() } catch {}
+  }, minutes(Math.max(60, Number(process.env.SOURCING_TICK_MINUTES || 60))))
+  setInterval(async () => {
+    try { await runDiscoveryInstagramSmart(); await runConnectInstagramSmart(); await checkInstagramAcceptsSmart() } catch {}
+  }, minutes(Math.max(75, Number(process.env.SOURCING_TICK_MINUTES || 60))))
 })
