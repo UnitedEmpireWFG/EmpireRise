@@ -4,6 +4,7 @@ import express from 'express'
 import cors from 'cors'
 import reqlog from './middleware/reqlog.js'
 import { requireAuth } from './middleware/auth.js'
+import { timePolicy } from './services/time_windows.js'
 
 /* ===== Smart sourcing (no keywords) ===== */
 import {
@@ -98,9 +99,14 @@ app.use((_, res, next) => {
   next()
 })
 
+/* ---------- public root & health (avoid 401s for pings) ---------- */
+app.head('/', (_req, res) => res.status(200).end())
+app.get('/', (_req, res) => res.type('text/plain').send('EmpireRise backend is live'))
+app.get('/healthz', (_req, res) => res.json({ ok: true, t: Date.now() }))
+
 /* ================== CORS (tight) ================== */
 const NETLIFY_ORIGIN = process.env.ORIGIN_APP || '' // e.g. https://empirerise.netlify.app
-const allowList = [ NETLIFY_ORIGIN, 'http://localhost:5173', 'http://localhost:8787' ].filter(Boolean)
+const allowList = [NETLIFY_ORIGIN, 'http://localhost:5173', 'http://localhost:8787'].filter(Boolean)
 
 function isAllowedOrigin(origin) {
   if (!origin) return true
@@ -113,13 +119,13 @@ app.use((_, res, next) => { res.setHeader('Vary', 'Origin'); next() })
 
 app.use(cors({
   origin(origin, cb) { isAllowedOrigin(origin) ? cb(null, true) : cb(new Error(`cors_blocked ${origin || 'no_origin'}`)) },
-  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization','x-app-key'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-app-key'],
   credentials: true,
   maxAge: 600
 }))
 
-// Explicit preflight handler
+// Preflight
 app.options('*', (req, res) => {
   const origin = req.headers.origin || ''
   if (!isAllowedOrigin(origin)) return res.status(403).end()
@@ -133,18 +139,6 @@ app.options('*', (req, res) => {
 /* ---------- body + req logging ---------- */
 app.use(express.json({ limit: '2mb' }))
 app.use(reqlog)
-
-/* ---------- DEBUG: log headers for every /api request ---------- */
-app.use('/api', (req, _res, next) => {
-  console.log('[auth debug] Incoming', req.method, req.path)
-  console.log('[auth debug] Headers:', JSON.stringify({
-    origin: req.headers.origin,
-    authorization: req.headers.authorization,
-    referer: req.headers.referer,
-    'sec-fetch-site': req.headers['sec-fetch-site']
-  }, null, 2))
-  next()
-})
 
 /* ---------------- PUBLIC ---------------- */
 app.use('/api/health', health)
@@ -181,7 +175,7 @@ app.use('/api/leads', leadsRoutes)
 app.use('/api/leads', leadsAdd)
 app.use('/api/export', exportCsv)
 app.use('/api/briefings', briefings)
-// app.use('/api/dashboard', dashboardRoutes) // keeping inline route below instead
+// app.use('/api/dashboard', dashboardRoutes) // inline route below
 app.use('/api/settings', settingsRoutes)
 app.use('/api/context', contextRoutes)
 app.use('/api/app-settings', appSettings)
@@ -195,7 +189,6 @@ app.use('/api', threadsRouter)
 app.use('/api', offersRouter)
 app.use('/api', misc)
 
-/* ---- extra routers ---- */
 app.use(liBatchRouter)
 app.use(queueBulkRouter)
 app.use(prospectsRouter)
@@ -223,7 +216,7 @@ app.get('/api/dashboard', (req, res) => {
 app.use((err, _req, res, _next) => {
   const msg = err?.message || 'server_error'
   if (msg?.startsWith?.('cors_blocked')) return res.status(403).json({ ok: false, error: msg })
-  if (['unauthorized','Unauthorized','invalid_token'].includes(msg)) return res.status(401).json({ ok: false, error: 'unauthorized' })
+  if (['unauthorized', 'Unauthorized', 'invalid_token'].includes(msg)) return res.status(401).json({ ok: false, error: 'unauthorized' })
   res.status(200).json({ ok: false, error: msg })
 })
 
@@ -231,6 +224,7 @@ app.use((err, _req, res, _next) => {
 const port = process.env.PORT || 8787
 app.listen(port, () => {
   console.log(`EmpireRise API on ${port}`)
+  console.log('Work window policy:', timePolicy?._cfg || {})
 
   // ===== Existing crons =====
   startBirthdayCron()
@@ -257,6 +251,7 @@ app.listen(port, () => {
     const liPollEvery = Math.max(60, Number(process.env.LI_POLL_INTERVAL_SEC || 120))
     setInterval(() => tickLinkedInInboxPoller().catch(()=>{}), liPollEvery * 1000)
   }
+
   if (String(process.env.FB_SENDER_ENABLED || 'true') === 'true') {
     setInterval(() => tickFacebookSender().catch(()=>{}), 45_000)
   }
@@ -269,14 +264,26 @@ app.listen(port, () => {
   const minutes = (m) => m * 60 * 1000
 
   setInterval(async () => {
-    try { await runDiscoveryLinkedInSmart(); await runConnectLinkedInSmart(); await checkLinkedInAcceptsSmart() } catch {}
+    try {
+      await runDiscoveryLinkedInSmart()
+      await runConnectLinkedInSmart()
+      await checkLinkedInAcceptsSmart()
+    } catch {}
   }, minutes(Math.max(45, Number(process.env.SOURCING_TICK_MINUTES || 60))))
 
   setInterval(async () => {
-    try { await runDiscoveryFacebookSmart(); await runConnectFacebookSmart(); await checkFacebookAcceptsSmart() } catch {}
+    try {
+      await runDiscoveryFacebookSmart()
+      await runConnectFacebookSmart()
+      await checkFacebookAcceptsSmart()
+    } catch {}
   }, minutes(Math.max(60, Number(process.env.SOURCING_TICK_MINUTES || 60))))
 
   setInterval(async () => {
-    try { await runDiscoveryInstagramSmart(); await runConnectInstagramSmart(); await checkInstagramAcceptsSmart() } catch {}
+    try {
+      await runDiscoveryInstagramSmart()
+      await runConnectInstagramSmart()
+      await checkInstagramAcceptsSmart()
+    } catch {}
   }, minutes(Math.max(75, Number(process.env.SOURCING_TICK_MINUTES || 60))))
 })
