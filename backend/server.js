@@ -3,35 +3,29 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import reqlog from './middleware/reqlog.js'
-import { maybeBypass, requireAuth } from './middleware/auth.js'
+import { requireAuth } from './middleware/auth.js' // ⬅️ only this
 import { timePolicy } from './services/time_windows.js'
 
-/* ===== Smart sourcing (no keywords) ===== */
-import {
-  runDiscoveryLinkedInSmart, runConnectLinkedInSmart, checkLinkedInAcceptsSmart,
-  runDiscoveryFacebookSmart, runConnectFacebookSmart, checkFacebookAcceptsSmart,
-  runDiscoveryInstagramSmart, runConnectInstagramSmart, checkInstagramAcceptsSmart
-} from './worker/discovery_smart_all.js'
-
-/* ===== Health/Auth ===== */
+/* ===== Health/Auth (public) ===== */
 import health from './routes/health.js'
 import healthFull from './routes/health_full.js'
 import auth from './routes/auth.js'
 
-/* ===== Platforms, OAuth, webhooks ===== */
+/* ===== Platforms, OAuth, webhooks (public) ===== */
 import oauthMeta from './routes/oauth_meta.js'
 import metaWebhooks from './routes/meta_webhooks.js'
+import linkedinInbound from './routes/linkedin_inbound.js'
+import calendlyRouter from './routes/calendly.js'
 
-/* ===== Platform APIs ===== */
+/* ===== Protected feature routes ===== */
+import adminUsersRouter from './routes/admin_users.js'
 import metaIds from './routes/meta_ids.js'
 import meta from './routes/meta.js'
 import importMeta from './routes/import_meta.js'
 import oauthLinkedIn from './routes/oauth_linkedin.js'
 import linkedinPost from './routes/linkedin_post.js'
 import importLinkedIn from './routes/import_linkedin.js'
-import adminUsersRouter from './routes/admin_users.js'
-
-/* ===== App features ===== */
+import igDmRouter from './routes/ig_dm.js'
 import messagesRoutes from './routes/messages.js'
 import approvalsRoutes from './routes/approvals.js'
 import approvalsBulkRouter from './routes/approvals_bulk.js'
@@ -43,9 +37,7 @@ import replies from './routes/replies.js'
 import timeline from './routes/timeline.js'
 import exportCsv from './routes/export_csv.js'
 import briefings from './routes/briefings.js'
-// import dashboardRoutes from './routes/dashboard.js' // keeping inline route below instead
-import calendlyRouter from './routes/calendly.js'
-import misc from './routes/misc_stub.js'
+import calendly from './routes/calendly.js' // (if used elsewhere)
 import contextRoutes from './routes/context.js'
 import appSettings from './routes/settings_app.js'
 import settingsRoutes from './routes/settings.js'
@@ -59,16 +51,6 @@ import templatesRouter from './routes/templates.js'
 import growthRouter from './routes/growth.js'
 import threadsRouter from './routes/threads.js'
 import offersRouter from './routes/offers.js'
-import linkedinInbound from './routes/linkedin_inbound.js'
-import igDmRouter from './routes/ig_dm.js'
-
-/* ===== LI/FB senders & pollers ===== */
-import { tickLinkedInSender } from './worker/li_dm_sender.js'
-import { tickLinkedInInboxPoller } from './worker/li_inbox_poller.js'
-import { tickFacebookSender } from './worker/fb_dm_sender.js'
-import { tickFacebookInboxPoller } from './worker/fb_inbox_poller.js'
-
-/* ===== Extra routers ===== */
 import liBatchRouter from './routes/li_batch.js'
 import queueBulkRouter from './routes/queue_bulk.js'
 import prospectsRouter from './routes/prospects.js'
@@ -99,17 +81,9 @@ app.use((_, res, next) => {
   next()
 })
 
-/* ---------- PUBLIC ROOT & HEALTH (no auth) ---------- */
-app.head('/', (_req, res) => res.status(200).end())
-app.get('/', (_req, res) => res.type('text/plain').send('EmpireRise backend is live'))
-app.get('/healthz', (_req, res) => res.json({ ok: true, t: Date.now() }))
-
-/* ---------- OPTIONS short-circuit BEFORE anything ---------- */
-app.use(maybeBypass)
-
 /* ================== CORS (tight) ================== */
-const NETLIFY_ORIGIN = process.env.ORIGIN_APP || '' // e.g. https://empirerise.netlify.app
-const allowList = [NETLIFY_ORIGIN, 'http://localhost:5173', 'http://localhost:8787'].filter(Boolean)
+const NETLIFY_ORIGIN = (process.env.ORIGIN_APP || '').replace(/\/+$/,'')
+const allowList = [ NETLIFY_ORIGIN, 'http://localhost:5173', 'http://localhost:8787' ].filter(Boolean)
 
 function isAllowedOrigin(origin) {
   if (!origin) return true
@@ -128,7 +102,7 @@ app.use(cors({
   maxAge: 600
 }))
 
-// Preflight (explicit)
+// Preflight
 app.options('*', (req, res) => {
   const origin = req.headers.origin || ''
   if (!isAllowedOrigin(origin)) return res.status(403).end()
@@ -143,7 +117,8 @@ app.options('*', (req, res) => {
 app.use(express.json({ limit: '2mb' }))
 app.use(reqlog)
 
-/* ---------------- PUBLIC MOUNTS ---------------- */
+/* ---------------- PUBLIC ---------------- */
+app.get('/healthz', (_req, res) => res.status(200).send('ok')) // tiny health
 app.use('/api/health', health)
 app.use('/api/health/full', healthFull)
 app.use('/auth', auth)
@@ -153,6 +128,7 @@ app.use('/webhooks/linkedin', linkedinInbound)
 app.use('/webhooks/calendly', calendlyRouter)
 
 /* ---------------- AUTH WALL (once) ---------------- */
+// Everything below this line requires a valid Supabase JWT
 app.use(requireAuth)
 app.use(adminUsersRouter)
 
@@ -178,7 +154,6 @@ app.use('/api/leads', leadsRoutes)
 app.use('/api/leads', leadsAdd)
 app.use('/api/export', exportCsv)
 app.use('/api/briefings', briefings)
-// app.use('/api/dashboard', dashboardRoutes) // keeping inline route below instead
 app.use('/api/settings', settingsRoutes)
 app.use('/api/context', contextRoutes)
 app.use('/api/app-settings', appSettings)
@@ -190,9 +165,6 @@ app.use('/api/growth', growthRouter)
 app.use('/api', templatesRouter)
 app.use('/api', threadsRouter)
 app.use('/api', offersRouter)
-app.use('/api', misc)
-
-// extra routers
 app.use(liBatchRouter)
 app.use(queueBulkRouter)
 app.use(prospectsRouter)
@@ -228,7 +200,7 @@ app.use((err, _req, res, _next) => {
 const port = process.env.PORT || 8787
 app.listen(port, () => {
   console.log(`EmpireRise API on ${port}`)
-  console.log('Work window policy:', timePolicy?._cfg)
+  console.log('Work window policy:', timePolicy._cfg)
 
   // ===== Existing crons =====
   startBirthdayCron()
@@ -240,57 +212,10 @@ app.listen(port, () => {
   startGhostNudgesCron()
   startABHousekeepingCron()
 
-  // LI daily batch initializer (safe retry)
+  // LinkedIn daily batch initializer (safe retry)
   const safeInitLiBatch = () => {
     try { initLiDailyBatch(globalUserCache); console.log('liDailyBatch initialized') }
     catch (e) { console.log('initLiDailyBatch skipped:', e.message); setTimeout(safeInitLiBatch, 60_000) }
   }
   safeInitLiBatch()
-
-  // ===== Your existing DM senders & pollers =====
-  if (String(process.env.LI_SENDER_ENABLED || 'true') === 'true') {
-    setInterval(() => tickLinkedInSender().catch(()=>{}), 45_000)
-  }
-  if (String(process.env.LI_POLLER_ENABLED || 'true') === 'true') {
-    const liPollEvery = Math.max(60, Number(process.env.LI_POLL_INTERVAL_SEC || 120))
-    setInterval(() => tickLinkedInInboxPoller().catch(()=>{}), liPollEvery * 1000)
-  }
-
-  if (String(process.env.FB_SENDER_ENABLED || 'true') === 'true') {
-    setInterval(() => tickFacebookSender().catch(()=>{}), 45_000)
-  }
-  if (String(process.env.FB_POLLER_ENABLED || 'true') === 'true') {
-    const fbPollEvery = Math.max(90, Number(process.env.FB_POLLER_INTERVAL_SEC || process.env.FB_POLL_INTERVAL_SEC || 150))
-    setInterval(() => tickFacebookInboxPoller().catch(()=>{}), fbPollEvery * 1000)
-  }
-
-  // ===== NEW: smart discovery → connect → accept → auto-enqueue (all 3) =====
-  const minutes = (m) => m * 60 * 1000
-
-  // LinkedIn trickle
-  setInterval(async () => {
-    try {
-      await runDiscoveryLinkedInSmart()
-      await runConnectLinkedInSmart()
-      await checkLinkedInAcceptsSmart()
-    } catch {}
-  }, minutes(Math.max(45, Number(process.env.SOURCING_TICK_MINUTES || 60))))
-
-  // Facebook trickle
-  setInterval(async () => {
-    try {
-      await runDiscoveryFacebookSmart()
-      await runConnectFacebookSmart()
-      await checkFacebookAcceptsSmart()
-    } catch {}
-  }, minutes(Math.max(60, Number(process.env.SOURCING_TICK_MINUTES || 60))))
-
-  // Instagram trickle
-  setInterval(async () => {
-    try {
-      await runDiscoveryInstagramSmart()
-      await runConnectInstagramSmart()
-      await checkInstagramAcceptsSmart()
-    } catch {}
-  }, minutes(Math.max(75, Number(process.env.SOURCING_TICK_MINUTES || 60))))
 })
