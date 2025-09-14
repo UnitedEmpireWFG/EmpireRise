@@ -1,103 +1,68 @@
 import 'dotenv/config'
-import * as jose from 'jose'
+import { supaAdmin } from '../db.js'
 
-const AUTH_DEBUG = String(process.env.AUTH_DEBUG || 'false') === 'true'
-const AUTH_BYPASS = String(process.env.AUTH_BYPASS || 'false') === 'true'
+const DEBUG   = String(process.env.AUTH_DEBUG || 'false') === 'true'
+const BYPASS  = String(process.env.AUTH_BYPASS || 'false') === 'true'
+const HAS_SVC = !!process.env.SUPABASE_SERVICE_ROLE_KEY
 
-// Build the expected issuer prefix like: https://xyzcompany.supabase.co/auth/v1
-const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/, '')
-const EXPECT_ISS = SUPABASE_URL ? `${SUPABASE_URL}/auth/v1` : null
+function dlog(...args) { if (DEBUG) console.log('[auth]', ...args) }
 
-// Remote JWKS from Supabase
-const JWKS_URL =
-  process.env.SUPABASE_JWKS_URL ||
-  (SUPABASE_URL ? `${SUPABASE_URL}/auth/v1/keys` : null)
-
-if (!JWKS_URL) {
-  console.warn('[auth] WARNING: SUPABASE_JWKS_URL (or SUPABASE_URL) not set — JWT verification will fail.')
+function getBearer(req) {
+  const h = req.headers.authorization || req.headers.Authorization || ''
+  const m = String(h).match(/^Bearer\s+(.+)$/i)
+  return m ? m[1] : null
 }
 
-const JWKS = JWKS_URL ? jose.createRemoteJWKSet(new URL(JWKS_URL)) : null
-
-function dbg(msg, extra) {
-  if (!AUTH_DEBUG) return
-  try {
-    console.log('[auth]', msg, extra ? JSON.stringify(extra) : '')
-  } catch {
-    console.log('[auth]', msg)
+// Optional: let requests through if AUTH_BYPASS=true (for emergencies only)
+export function maybeBypass(req, _res, next) {
+  if (BYPASS) {
+    req.user = { sub: 'bypass', email: 'bypass@example.com', role: 'admin' }
   }
-}
-
-/**
- * Try to verify a Supabase JWT.
- * Strategy:
- *  1) Strict: audience 'authenticated', issuer startsWith EXPECT_ISS
- *  2) Fallback: no audience check, tolerate small clock skew
- */
-async function verifySupabaseJWT(token) {
-  if (!JWKS) throw new Error('jwks_unavailable')
-
-  // Decode first just for logging/inspection
-  let decoded = null
-  try {
-    decoded = jose.decodeJwt(token)
-  } catch {
-    // ignore
-  }
-  dbg('decoded_header', { iss: decoded?.iss, aud: decoded?.aud, sub: decoded?.sub })
-
-  // Strict path
-  try {
-    const strictRes = await jose.jwtVerify(token, JWKS, {
-      audience: 'authenticated',
-      issuer: EXPECT_ISS || undefined,
-      clockTolerance: 10 // seconds
-    })
-    return strictRes.payload
-  } catch (e) {
-    dbg('strict_verify_failed', { msg: e.message })
-  }
-
-  // Fallback (broader) — accept tokens that come from Supabase but have odd aud
-  const fallback = await jose.jwtVerify(token, JWKS, {
-    clockTolerance: 15
-  })
-  // If we still have issuer, sanity check it loosely
-  if (EXPECT_ISS && typeof fallback.payload.iss === 'string') {
-    if (!fallback.payload.iss.startsWith(EXPECT_ISS)) {
-      throw new Error('issuer_mismatch')
-    }
-  }
-  return fallback.payload
+  next()
 }
 
 export async function requireAuth(req, res, next) {
   try {
-    // Bypass (for setup emergencies only)
-    if (AUTH_BYPASS) {
-      dbg('bypass_on', { path: req.path })
-      req.user = { sub: 'bypass', role: 'admin', app_role: 'admin' }
+    // Always allow CORS preflight
+    if (req.method === 'OPTIONS') return res.status(204).end()
+
+    if (BYPASS) {
+      req.user = { sub: 'bypass', email: 'bypass@example.com', role: 'admin' }
       return next()
     }
 
-    // Pull Bearer token
-    const auth = req.headers.authorization || ''
-    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null
+    const token = getBearer(req)
     if (!token) {
-      dbg('missing_token', { path: req.path, method: req.method })
-      return res.status(401).json({ ok: false, error: 'unauthorized' })
+      dlog('missing_token', { path: req.path, method: req.method })
+      return res.status(401).json({ ok:false, error:'unauthorized' })
     }
 
-    // Verify
-    const payload = await verifySupabaseJWT(token)
+    if (!HAS_SVC) {
+      dlog('no_service_role_key', { msg: 'Set SUPABASE_SERVICE_ROLE_KEY in Render.' })
+      return res.status(500).json({ ok:false, error:'server_misconfigured' })
+    }
 
-    // Attach user and go on
-    req.user = payload || {}
-    dbg('ok', { sub: req.user?.sub, role: req.user?.role, path: req.path })
-    next()
+    // ✅ Validate with Supabase Admin (verifies signature & validity)
+    const { data, error } = await supaAdmin.auth.getUser(token)
+    if (error || !data?.user) {
+      dlog('supabase_validate_failed', { err: error?.message || 'no_user' })
+      return res.status(401).json({ ok:false, error:'unauthorized' })
+    }
+
+    // Attach a minimal user (use whatever fields your routes expect)
+    const u = data.user
+    req.user = {
+      sub: u.id,
+      email: u.email,
+      app_metadata: u.app_metadata || {},
+      user_metadata: u.user_metadata || {}
+    }
+
+    dlog('ok', { sub: req.user.sub, email: req.user.email, path: req.path })
+    return next()
   } catch (e) {
-    dbg('verify_failed', { path: req.path, err: e.message })
-    return res.status(401).json({ ok: false, error: 'unauthorized' })
+    dlog('verify_exception', { path: req.path, method: req.method, err: e?.message })
+    return res.status(401).json({ ok:false, error:'unauthorized' })
   }
 }
 
@@ -105,9 +70,9 @@ export function requireAdmin(req, res, next) {
   const role =
     req.user?.app_metadata?.app_role ||
     req.user?.user_metadata?.app_role ||
-    req.user?.app_role ||
-    req.user?.role
+    req.user?.role ||
+    req.user?.app_role
 
   if (role === 'admin') return next()
-  return res.status(403).json({ ok: false, error: 'forbidden' })
+  return res.status(403).json({ ok:false, error:'forbidden' })
 }
