@@ -1,78 +1,75 @@
-// backend/middleware/auth.js
 import 'dotenv/config'
 import * as jose from 'jose'
 
-const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/, '')
-const JWKS_URL = `${SUPABASE_URL}/auth/v1/keys`
-const JWKS = jose.createRemoteJWKSet(new URL(JWKS_URL))
+/**
+ * ENV NEEDED (Render backend):
+ * - SUPABASE_URL=https://<project-ref>.supabase.co
+ * - SUPABASE_JWKS_URL=https://<project-ref>.supabase.co/auth/v1/keys  (optional; auto-derives from SUPABASE_URL)
+ * - AUTH_DEBUG=true|false  (optional)
+ * - AUTH_BYPASS=false      (leave false in prod)
+ */
 
-const AUTH_DEBUG = String(process.env.AUTH_DEBUG || 'false') === 'true'
-const AUTH_BYPASS = String(process.env.AUTH_BYPASS || 'false') === 'true'
+const DEBUG = String(process.env.AUTH_DEBUG || 'false') === 'true'
+const BYPASS = String(process.env.AUTH_BYPASS || 'false') === 'true'
 
-// Audiences Supabase commonly sets on access tokens
-const ACCEPTED_AUDIENCES = new Set(['authenticated', 'supabase'])
+function dlog(...args) { if (DEBUG) console.log('[auth]', ...args) }
 
-function log(tag, obj = {}) {
-  if (!AUTH_DEBUG) return
-  try { console.log(`[auth] ${tag}`, JSON.stringify(obj)) }
-  catch { console.log(`[auth] ${tag}`, obj) }
+const SUPABASE_URL = process.env.SUPABASE_URL
+if (!SUPABASE_URL) {
+  console.error('[auth] Missing SUPABASE_URL env. JWT verification will fail.')
+}
+const JWKS_URL = process.env.SUPABASE_JWKS_URL || (SUPABASE_URL ? `${SUPABASE_URL.replace(/\/+$/,'')}/auth/v1/keys` : null)
+if (!JWKS_URL) {
+  console.error('[auth] Missing SUPABASE_JWKS_URL and cannot derive from SUPABASE_URL.')
 }
 
-export function maybeBypass(req, res, next) {
-  if (AUTH_BYPASS) {
-    req.user = { sub: 'bypass', app_role: 'admin', bypass: true }
+const JWKS = JWKS_URL ? jose.createRemoteJWKSet(new URL(JWKS_URL)) : null
+
+function getBearer(req) {
+  const auth = req.headers.authorization || req.headers.Authorization || ''
+  const m = String(auth).match(/^Bearer\s+(.+)$/i)
+  return m ? m[1] : null
+}
+
+// Optional bypass helper (exported because some files might import it)
+export function maybeBypass(req, _res, next) {
+  if (BYPASS) {
+    req.user = { sub: 'bypass', email: 'bypass@example.com', role: 'admin' }
     return next()
   }
-  next()
-}
-
-// Allow preflight without auth
-export function allowOptions(req, res, next) {
-  if (req.method === 'OPTIONS') return res.status(204).end()
-  next()
+  return next()
 }
 
 export async function requireAuth(req, res, next) {
   try {
-    const auth = req.headers.authorization || ''
-    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null
+    // Always allow CORS preflight
+    if (req.method === 'OPTIONS') return res.status(204).end()
+
+    if (BYPASS) {
+      req.user = { sub: 'bypass', email: 'bypass@example.com', role: 'admin' }
+      return next()
+    }
+
+    const token = getBearer(req)
     if (!token) {
-      log('missing_token', { path: req.path, method: req.method })
-      throw new Error('missing_token')
+      dlog('missing_token', { path: req.path, method: req.method })
+      return res.status(401).json({ ok:false, error:'unauthorized' })
     }
 
-    const { payload, protectedHeader } = await jose.jwtVerify(token, JWKS, {
-      issuer: `${SUPABASE_URL}/auth/v1`,
-      // We accept multiple audiences to avoid mismatch errors
-      audience: (aud) => ACCEPTED_AUDIENCES.has(String(aud))
-    })
+    if (!JWKS) throw new Error('jwks_not_configured')
 
-    // Optional: sanity checks typical on Supabase access tokens
-    if (!payload.sub || !payload.role) {
-      log('bad_payload', { payload })
-      throw new Error('bad_payload')
-    }
-
-    req.user = payload
-    if (AUTH_DEBUG) {
-      log('ok', {
-        sub: payload.sub,
-        email: payload.email,
-        role: payload.role,
-        aud: payload.aud,
-        iss: payload.iss,
-        alg: protectedHeader?.alg
-      })
-    }
-    next()
+    // Supabase access tokens have iss "supabase". We do NOT enforce audience here.
+    const { payload } = await jose.jwtVerify(token, JWKS, { issuer: 'supabase' })
+    req.user = payload || {}
+    return next()
   } catch (e) {
-    log('verify_fail', { path: req.path, method: req.method, msg: e?.message })
-    res.status(401).json({ ok: false, error: 'unauthorized' })
+    dlog('verify_failed', { path: req.path, method: req.method, err: e?.message })
+    return res.status(401).json({ ok:false, error:'unauthorized' })
   }
 }
 
-// Admin gate used by admin routes; graceful when missing
 export function requireAdmin(req, res, next) {
+  // Accept admin role from any of these fields (Supabase app_metadata/user_metadata vary)
   const role =
     req.user?.app_metadata?.app_role ||
     req.user?.user_metadata?.app_role ||
@@ -80,14 +77,5 @@ export function requireAdmin(req, res, next) {
     req.user?.app_role
 
   if (role === 'admin') return next()
-  return res.status(403).json({ ok: false, error: 'forbidden' })
-}
-
-// Debug endpoint handler (mounted in server.js)
-export function whoAmI(req, res) {
-  res.json({
-    ok: true,
-    bypass: !!req.user?.bypass,
-    user: req.user || null
-  })
+  return res.status(403).json({ ok:false, error:'forbidden' })
 }
