@@ -1,44 +1,41 @@
+// backend/middleware/auth.js
 import 'dotenv/config'
+import * as jose from 'jose'
 
-function decodeJwtPayload(token) {
+const JWKS = jose.createRemoteJWKSet(new URL(process.env.SUPABASE_JWKS_URL))
+
+export async function requireAuth(req, res, next) {
   try {
-    const [, payload] = token.split('.')
-    if (!payload) return {}
-    const json = Buffer.from(payload.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
-    return JSON.parse(json || '{}') || {}
-  } catch { return {} }
-}
+    const auth = req.headers.authorization || ''
+    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null
 
-export function requireAuth(req, res, next) {
-  const h = req.headers
-  const fromBearer = (h.authorization || '').startsWith('Bearer ')
-    ? h.authorization.slice(7).trim()
-    : ''
-  const token = fromBearer || (h['x-supa-token'] ? String(h['x-supa-token']) : '')
+    console.log('[auth debug] requireAuth hit. Path:', req.path)
+    console.log('[auth debug] Authorization header:', auth)
 
-  if (!token) {
-    return res.status(401).json({ ok:false, error:'unauthorized: missing token' })
+    if (!token) throw new Error('missing_token')
+
+    const { payload } = await jose.jwtVerify(token, JWKS, {
+      issuer: 'supabase',
+      audience: process.env.SUPABASE_URL
+    })
+
+    console.log('[auth debug] Token verified. Payload:', payload)
+
+    req.user = payload || {}
+    next()
+  } catch (e) {
+    console.error('[auth debug] Verification failed:', e.message)
+    return res.status(401).json({ ok: false, error: 'unauthorized' })
   }
-
-  const payload = decodeJwtPayload(token)
-  req.user = {
-    token,
-    sub: payload.sub || payload.user_id || null,
-    email: payload.email || payload.user_metadata?.email || null,
-    app_role: payload.app_role || payload.user_metadata?.app_role || null,
-    raw: payload
-  }
-  next()
 }
 
 export function requireAdmin(req, res, next) {
-  const role = req.user?.app_role
+  const role =
+    req.user?.app_metadata?.app_role ||
+    req.user?.user_metadata?.app_role ||
+    req.user?.app_role
+
   if (role === 'admin') return next()
-
-  const admins = String(process.env.ADMIN_EMAILS || '')
-    .split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
-  const email = String(req.user?.email || '').toLowerCase()
-  if (email && admins.includes(email)) return next()
-
-  return res.status(403).json({ ok:false, error:'forbidden' })
+  console.error('[auth debug] requireAdmin blocked. Role:', role)
+  return res.status(403).json({ ok: false, error: 'forbidden' })
 }

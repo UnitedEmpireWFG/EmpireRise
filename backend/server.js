@@ -1,24 +1,36 @@
+/* backend/server.js */
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import reqlog from './middleware/reqlog.js'
 import { requireAuth } from './middleware/auth.js'
-import { timePolicy } from './services/time_windows.js'
 
-/* ===== Public/health/auth ===== */
+/* ===== Smart sourcing (no keywords) ===== */
+import {
+  runDiscoveryLinkedInSmart, runConnectLinkedInSmart, checkLinkedInAcceptsSmart,
+  runDiscoveryFacebookSmart, runConnectFacebookSmart, checkFacebookAcceptsSmart,
+  runDiscoveryInstagramSmart, runConnectInstagramSmart, checkInstagramAcceptsSmart
+} from './worker/discovery_smart_all.js'
+
+/* ===== Health/Auth ===== */
 import health from './routes/health.js'
 import healthFull from './routes/health_full.js'
 import auth from './routes/auth.js'
 
-/* ===== OAuth + Webhooks ===== */
+/* ===== Platforms, OAuth, webhooks ===== */
 import oauthMeta from './routes/oauth_meta.js'
 import metaWebhooks from './routes/meta_webhooks.js'
-import oauthLinkedIn from './routes/oauth_linkedin.js'
-import linkedinInbound from './routes/linkedin_inbound.js'
-import calendlyRouter from './routes/calendly.js'
 
-/* ===== Protected feature routers ===== */
+/* ===== Platform APIs ===== */
+import metaIds from './routes/meta_ids.js'
+import meta from './routes/meta.js'
+import importMeta from './routes/import_meta.js'
+import oauthLinkedIn from './routes/oauth_linkedin.js'
+import linkedinPost from './routes/linkedin_post.js'
+import importLinkedIn from './routes/import_linkedin.js'
 import adminUsersRouter from './routes/admin_users.js'
+
+/* ===== App features ===== */
 import messagesRoutes from './routes/messages.js'
 import approvalsRoutes from './routes/approvals.js'
 import approvalsBulkRouter from './routes/approvals_bulk.js'
@@ -30,7 +42,8 @@ import replies from './routes/replies.js'
 import timeline from './routes/timeline.js'
 import exportCsv from './routes/export_csv.js'
 import briefings from './routes/briefings.js'
-import calendly from './routes/calendly.js'
+// import dashboardRoutes from './routes/dashboard.js' // using inline route below
+import calendlyRouter from './routes/calendly.js'
 import misc from './routes/misc_stub.js'
 import contextRoutes from './routes/context.js'
 import appSettings from './routes/settings_app.js'
@@ -45,12 +58,14 @@ import templatesRouter from './routes/templates.js'
 import growthRouter from './routes/growth.js'
 import threadsRouter from './routes/threads.js'
 import offersRouter from './routes/offers.js'
+import linkedinInbound from './routes/linkedin_inbound.js'
 import igDmRouter from './routes/ig_dm.js'
-import metaIds from './routes/meta_ids.js'
-import meta from './routes/meta.js'
-import importMeta from './routes/import_meta.js'
-import linkedinPost from './routes/linkedin_post.js'
-import importLinkedIn from './routes/import_linkedin.js'
+
+/* ===== LI/FB senders & pollers ===== */
+import { tickLinkedInSender } from './worker/li_dm_sender.js'
+import { tickLinkedInInboxPoller } from './worker/li_inbox_poller.js'
+import { tickFacebookSender } from './worker/fb_dm_sender.js'
+import { tickFacebookInboxPoller } from './worker/fb_inbox_poller.js'
 
 /* ===== Extra routers ===== */
 import liBatchRouter from './routes/li_batch.js'
@@ -60,15 +75,6 @@ import resolverRouter from './routes/resolver.js'
 
 /* ===== Workers & jobs ===== */
 import './worker/scheduler.js'
-import { tickLinkedInSender } from './worker/li_dm_sender.js'
-import { tickLinkedInInboxPoller } from './worker/li_inbox_poller.js'
-import { tickFacebookSender } from './worker/fb_dm_sender.js'
-import { tickFacebookInboxPoller } from './worker/fb_inbox_poller.js'
-import {
-  runDiscoveryLinkedInSmart, runConnectLinkedInSmart, checkLinkedInAcceptsSmart,
-  runDiscoveryFacebookSmart, runConnectFacebookSmart, checkFacebookAcceptsSmart,
-  runDiscoveryInstagramSmart, runConnectInstagramSmart, checkInstagramAcceptsSmart
-} from './worker/discovery_smart_all.js'
 import { startBirthdayCron } from './jobs/birthday_cron.js'
 import { startFollowupsCron } from './jobs/followups_cron.js'
 import { startSourcingCron } from './worker/sourcing_cron.js'
@@ -80,19 +86,20 @@ import { startABHousekeepingCron } from './worker/ab_housekeeping.js'
 import { initLiDailyBatch } from './scheduler/jobs/liDailyBatch.js'
 import globalUserCache from './services/users/cache.js'
 
+/* ===== AI smoke test ===== */
 import { aiComplete } from './lib/ai.js'
 
 const app = express()
 
-/* ---------- keep-alive ---------- */
+/* ---------- keep-alive for proxies ---------- */
 app.use((_, res, next) => {
   res.setHeader('Connection', 'keep-alive')
   res.setHeader('Keep-Alive', 'timeout=5')
   next()
 })
 
-/* ---------- CORS (tight + credentials) ---------- */
-const NETLIFY_ORIGIN = process.env.ORIGIN_APP || ''
+/* ================== CORS (tight) ================== */
+const NETLIFY_ORIGIN = process.env.ORIGIN_APP || '' // e.g. https://empirerise.netlify.app
 const allowList = [ NETLIFY_ORIGIN, 'http://localhost:5173', 'http://localhost:8787' ].filter(Boolean)
 
 function isAllowedOrigin(origin) {
@@ -101,21 +108,25 @@ function isAllowedOrigin(origin) {
   try { if (new URL(origin).host.endsWith('.netlify.app')) return true } catch {}
   return false
 }
+
 app.use((_, res, next) => { res.setHeader('Vary', 'Origin'); next() })
+
 app.use(cors({
   origin(origin, cb) { isAllowedOrigin(origin) ? cb(null, true) : cb(new Error(`cors_blocked ${origin || 'no_origin'}`)) },
   methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization','x-supa-token','x-app-key'],
+  allowedHeaders: ['Content-Type','Authorization','x-app-key'],
   credentials: true,
   maxAge: 600
 }))
+
+// Explicit preflight handler
 app.options('*', (req, res) => {
   const origin = req.headers.origin || ''
   if (!isAllowedOrigin(origin)) return res.status(403).end()
   res.setHeader('Access-Control-Allow-Origin', origin)
   res.setHeader('Access-Control-Allow-Credentials', 'true')
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type,x-supa-token,x-app-key')
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type,x-app-key')
   res.status(204).end()
 })
 
@@ -123,7 +134,19 @@ app.options('*', (req, res) => {
 app.use(express.json({ limit: '2mb' }))
 app.use(reqlog)
 
-/* ---------- PUBLIC ---------- */
+/* ---------- DEBUG: log headers for every /api request ---------- */
+app.use('/api', (req, _res, next) => {
+  console.log('[auth debug] Incoming', req.method, req.path)
+  console.log('[auth debug] Headers:', JSON.stringify({
+    origin: req.headers.origin,
+    authorization: req.headers.authorization,
+    referer: req.headers.referer,
+    'sec-fetch-site': req.headers['sec-fetch-site']
+  }, null, 2))
+  next()
+})
+
+/* ---------------- PUBLIC ---------------- */
 app.use('/api/health', health)
 app.use('/api/health/full', healthFull)
 app.use('/auth', auth)
@@ -132,20 +155,11 @@ app.use('/webhooks/meta', metaWebhooks)
 app.use('/webhooks/linkedin', linkedinInbound)
 app.use('/webhooks/calendly', calendlyRouter)
 
-/* ---------- TEMP AUTH DEBUG (keep until 200s) ---------- */
-app.use((req, _res, next) => {
-  if (req.path.startsWith('/api')) {
-    const auth = req.headers.authorization || ''
-    console.log('[AUTH DEBUG]', req.path, 'auth_len=', auth.length, 'head=', auth ? auth.slice(0,25)+'…' : '(none)')
-  }
-  next()
-})
-
-/* ---------- AUTH WALL ---------- */
+/* ---------------- AUTH WALL ---------------- */
 app.use(requireAuth)
 app.use(adminUsersRouter)
 
-/* ---------- PROTECTED MOUNTS ---------- */
+/* --------------- PROTECTED MOUNTS --------------- */
 app.use('/api/meta', metaIds)
 app.use('/api/meta', meta)
 app.use('/api/import/meta', importMeta)
@@ -167,6 +181,7 @@ app.use('/api/leads', leadsRoutes)
 app.use('/api/leads', leadsAdd)
 app.use('/api/export', exportCsv)
 app.use('/api/briefings', briefings)
+// app.use('/api/dashboard', dashboardRoutes) // keeping inline route below instead
 app.use('/api/settings', settingsRoutes)
 app.use('/api/context', contextRoutes)
 app.use('/api/app-settings', appSettings)
@@ -180,27 +195,31 @@ app.use('/api', threadsRouter)
 app.use('/api', offersRouter)
 app.use('/api', misc)
 
+/* ---- extra routers ---- */
 app.use(liBatchRouter)
 app.use(queueBulkRouter)
 app.use(prospectsRouter)
 app.use(resolverRouter)
 
-/* ---------- AI smoke test ---------- */
+/* ---------- AI smoke test (protected) ---------- */
 app.get('/api/test/ai', async (_req, res) => {
   try { res.json({ ok: true, text: await aiComplete('Write a short friendly check in.') }) }
   catch (e) { res.status(200).json({ ok: false, error: e.message }) }
 })
 
-/* ---------- Minimal /api/dashboard ---------- */
+/* ---------- Minimal /api/dashboard (protected) ---------- */
 app.get('/api/dashboard', (req, res) => {
   res.json({
     ok: true,
     user: req.user?.email || req.user?.sub || null,
-    sent: 0, replies: 0, qualified: 0, booked: 0
+    sent: 0,
+    replies: 0,
+    qualified: 0,
+    booked: 0
   })
 })
 
-/* ---------- ERRORS ---------- */
+/* ---------------- ERRORS ---------------- */
 app.use((err, _req, res, _next) => {
   const msg = err?.message || 'server_error'
   if (msg?.startsWith?.('cors_blocked')) return res.status(403).json({ ok: false, error: msg })
@@ -208,13 +227,12 @@ app.use((err, _req, res, _next) => {
   res.status(200).json({ ok: false, error: msg })
 })
 
-/* ---------- BOOT ---------- */
+/* ---------------- BOOT ---------------- */
 const port = process.env.PORT || 8787
 app.listen(port, () => {
   console.log(`EmpireRise API on ${port}`)
-  console.log('Work window policy:', timePolicy._cfg)
 
-  // existing crons
+  // ===== Existing crons =====
   startBirthdayCron()
   startFollowupsCron()
   startSourcingCron()
@@ -224,12 +242,14 @@ app.listen(port, () => {
   startGhostNudgesCron()
   startABHousekeepingCron()
 
+  // LI daily batch initializer (safe retry)
   const safeInitLiBatch = () => {
     try { initLiDailyBatch(globalUserCache); console.log('liDailyBatch initialized') }
     catch (e) { console.log('initLiDailyBatch skipped:', e.message); setTimeout(safeInitLiBatch, 60_000) }
   }
   safeInitLiBatch()
 
+  // ===== Your existing DM senders & pollers =====
   if (String(process.env.LI_SENDER_ENABLED || 'true') === 'true') {
     setInterval(() => tickLinkedInSender().catch(()=>{}), 45_000)
   }
@@ -245,8 +265,18 @@ app.listen(port, () => {
     setInterval(() => tickFacebookInboxPoller().catch(()=>{}), fbPollEvery * 1000)
   }
 
+  // ===== NEW: smart discovery → connect → accept → auto-enqueue (all 3) =====
   const minutes = (m) => m * 60 * 1000
-  setInterval(async () => { try { await runDiscoveryLinkedInSmart(); await runConnectLinkedInSmart(); await checkLinkedInAcceptsSmart() } catch {} }, minutes(Math.max(45, Number(process.env.SOURCING_TICK_MINUTES || 60))))
-  setInterval(async () => { try { await runDiscoveryFacebookSmart(); await runConnectFacebookSmart(); await checkFacebookAcceptsSmart() } catch {} }, minutes(Math.max(60, Number(process.env.SOURCING_TICK_MINUTES || 60))))
-  setInterval(async () => { try { await runDiscoveryInstagramSmart(); await runConnectInstagramSmart(); await checkInstagramAcceptsSmart() } catch {} }, minutes(Math.max(75, Number(process.env.SOURCING_TICK_MINUTES || 60))))
+
+  setInterval(async () => {
+    try { await runDiscoveryLinkedInSmart(); await runConnectLinkedInSmart(); await checkLinkedInAcceptsSmart() } catch {}
+  }, minutes(Math.max(45, Number(process.env.SOURCING_TICK_MINUTES || 60))))
+
+  setInterval(async () => {
+    try { await runDiscoveryFacebookSmart(); await runConnectFacebookSmart(); await checkFacebookAcceptsSmart() } catch {}
+  }, minutes(Math.max(60, Number(process.env.SOURCING_TICK_MINUTES || 60))))
+
+  setInterval(async () => {
+    try { await runDiscoveryInstagramSmart(); await runConnectInstagramSmart(); await checkInstagramAcceptsSmart() } catch {}
+  }, minutes(Math.max(75, Number(process.env.SOURCING_TICK_MINUTES || 60))))
 })

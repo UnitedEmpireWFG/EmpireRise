@@ -10,7 +10,19 @@ const links = [
 
 export default function Navbar() {
   const { pathname } = useLocation()
-  const logoUrl = `${import.meta.env.BASE_URL || '/'}ue-logo.png` // in /public
+  const logoUrl = `${import.meta.env.BASE_URL || '/'}ue-logo.png.PNG` // file lives in /public
+
+  const pill = (active) => ({
+    padding: "6px 14px",
+    borderRadius: 6,
+    textDecoration: "none",
+    border: "1px solid #ffd700",
+    fontWeight: 700,
+    // inactive = green fill + gold text; active = gold fill + dark text
+    background: active ? "#ffd700" : "#0e4d1b",
+    color: active ? "#0c0c0c" : "#ffd700",
+    boxShadow: "inset 0 0 0 1px rgba(0,0,0,.25)"
+  })
 
   return (
     <header style={{ background:"#0c0c0c", borderBottom:"1px solid rgba(255,215,0,.25)", padding:"10px 16px" }}>
@@ -21,25 +33,12 @@ export default function Navbar() {
           <span style={{ fontWeight:"bold", letterSpacing:1, color:"#ffd700" }}>EMPIRE RISE</span>
         </div>
 
-        {/* Center: pills */}
+        {/* Center: pills (exact visual request) */}
         <nav style={{ display:"flex", gap:10 }}>
           {links.map(l => {
             const active = pathname === l.to
             return (
-              <Link
-                key={l.to}
-                to={l.to}
-                style={{
-                  padding:"6px 14px",
-                  borderRadius:6,
-                  textDecoration:"none",
-                  border:"1px solid #ffd700",
-                  fontWeight:700,
-                  background: active ? "#ffd700" : "#0e4d1b",
-                  color: active ? "#0c0c0c" : "#ffd700",
-                  boxShadow: "inset 0 0 0 1px rgba(0,0,0,.25)"
-                }}
-              >
+              <Link key={l.to} to={l.to} style={pill(active)}>
                 {l.label}
               </Link>
             )
