@@ -1,3 +1,4 @@
+/* backend/server.js */
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
@@ -10,20 +11,20 @@ import health from './routes/health.js'
 import healthFull from './routes/health_full.js'
 import auth from './routes/auth.js'
 
-/* ===== Platforms, OAuth, webhooks ===== */
+/* ===== Platforms, OAuth, webhooks (PUBLIC) ===== */
 import oauthMeta from './routes/oauth_meta.js'
 import metaWebhooks from './routes/meta_webhooks.js'
+import oauthLinkedIn from './routes/oauth_linkedin.js'
+import linkedinInbound from './routes/linkedin_inbound.js'
 
-/* ===== Platform APIs ===== */
+/* ===== Platform APIs (PROTECTED) ===== */
 import metaIds from './routes/meta_ids.js'
 import meta from './routes/meta.js'
 import importMeta from './routes/import_meta.js'
-import oauthLinkedIn from './routes/oauth_linkedin.js'
 import linkedinPost from './routes/linkedin_post.js'
 import importLinkedIn from './routes/import_linkedin.js'
-import adminUsersRouter from './routes/admin_users.js'
 
-/* ===== App features ===== */
+/* ===== App features (PROTECTED) ===== */
 import messagesRoutes from './routes/messages.js'
 import approvalsRoutes from './routes/approvals.js'
 import approvalsBulkRouter from './routes/approvals_bulk.js'
@@ -50,10 +51,8 @@ import templatesRouter from './routes/templates.js'
 import growthRouter from './routes/growth.js'
 import threadsRouter from './routes/threads.js'
 import offersRouter from './routes/offers.js'
-import linkedinInbound from './routes/linkedin_inbound.js'
 import igDmRouter from './routes/ig_dm.js'
-import adminUsersRouter from './routes/admin_users.js'
-import { requireAdmin } from './middleware/auth.js'
+import adminUsersRouter from './routes/admin_users.js' // ✅ import ONCE
 
 /* ===== LI/FB senders & pollers ===== */
 import { tickLinkedInSender } from './worker/li_dm_sender.js'
@@ -93,7 +92,7 @@ app.use((_, res, next) => {
 })
 
 /* ---------- CORS (tight) ---------- */
-const NETLIFY_ORIGIN = (process.env.ORIGIN_APP || '').replace(/\/+$/,'')
+const NETLIFY_ORIGIN = (process.env.ORIGIN_APP || '').replace(/\/+$/,'') // e.g. https://empirerise.netlify.app
 const allowList = [ NETLIFY_ORIGIN, 'http://localhost:5173', 'http://localhost:8787' ].filter(Boolean)
 function isAllowedOrigin(origin) {
   if (!origin) return true
@@ -127,17 +126,20 @@ app.get('/healthz', (_req, res) => res.json({ ok:true, t:Date.now() }))
 app.use('/api/health', health)
 app.use('/api/health/full', healthFull)
 app.use('/auth', auth)
+
+// OAuth/webhooks should be PUBLIC (redirects come without our token)
 app.use('/oauth/meta', oauthMeta)
+app.use('/oauth/linkedin', oauthLinkedIn)
 app.use('/webhooks/meta', metaWebhooks)
 app.use('/webhooks/linkedin', linkedinInbound)
-app.use('/webhooks/calendly', calendlyRouter)
+
+// Public root + ping
 app.get('/', (_req, res) => res.json({ ok:true, name:'EmpireRise API' }))
 app.get('/auth/ping', (_req, res) => res.json({ ok:true }))
 
 /* ---------- AUTH WALL for /api/** ONLY ---------- */
-app.use(maybeBypass)
-app.use('/api', requireAuth)
-app.use('/api', requireAdmin, adminUsersRouter)
+app.use(maybeBypass)               // harmless unless AUTH_BYPASS=true
+app.use('/api', requireAuth)       // protect everything under /api
 
 /* ---------- PROTECTED MOUNTS (/api/...) ---------- */
 app.use('/api/meta', metaIds)
@@ -172,7 +174,9 @@ app.use('/api', templatesRouter)
 app.use('/api', threadsRouter)
 app.use('/api', offersRouter)
 app.use('/api', misc)
-app.use('/api', requireAdmin, adminUsersRouter)
+
+// ✅ Admin router — single mount, namespaced, protected
+app.use('/api/admin', requireAdmin, adminUsersRouter)
 
 /* ---------- EXAMPLE protected endpoints ---------- */
 app.get('/api/test/ai', async (_req, res) => {
@@ -180,7 +184,11 @@ app.get('/api/test/ai', async (_req, res) => {
   catch (e) { res.status(200).json({ ok:false, error:e.message }) }
 })
 app.get('/api/dashboard', (req, res) => {
-  res.json({ ok:true, user: req.user?.email || req.user?.sub || null, sent:0, replies:0, qualified:0, booked:0 })
+  res.json({
+    ok:true,
+    user: req.user?.email || req.user?.sub || null,
+    sent:0, replies:0, qualified:0, booked:0
+  })
 })
 
 /* ---------- ERRORS ---------- */
