@@ -35,6 +35,7 @@ export default function App() {
           <Route path="/assist-li" element={<Private><AssistLI/></Private>} />
           {/* fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="/settings" element={<Settings/>} />
         </Routes>
       </main>
     </div>

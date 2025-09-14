@@ -1,53 +1,49 @@
 // frontend/src/lib/apiFetch.js
-import { supa } from './supa'
+import { createClient } from '@supabase/supabase-js'
 
-// Netlify -> set VITE_API_BASE to your Render backend root, e.g. https://empirerise.onrender.com
-const API_BASE = import.meta.env.VITE_API_BASE?.replace(/\/+$/, '') || ''
+export const supa = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY,
+  {
+    auth: {
+      persistSession: true,           // keep session across reloads
+      autoRefreshToken: true
+    }
+  }
+)
 
-// Simple in-memory token cache to avoid calling supa on every request
-let cached = { token: null, at: 0 }
-async function getToken() {
-  const now = Date.now()
-  if (cached.token && now - cached.at < 50_000) return cached.token // refresh every ~50s
+// Base URL for backend API (Render, local, etc.)
+const API_BASE =
+  import.meta.env.VITE_API_BASE?.replace(/\/+$/, '') || 'http://localhost:8787'
+
+async function authHeader() {
+  // Always fetch the latest session (works after login refresh)
   const { data } = await supa.auth.getSession()
-  const t = data?.session?.access_token || null
-  cached = { token: t, at: now }
-  return t
+  const token = data?.session?.access_token
+  return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
 /**
- * apiFetch(path, opts) – automatically prefixes API base and attaches Bearer token
- * Throws for network errors; returns parsed JSON
+ * apiFetch(path, options)
+ * Usage: apiFetch('/api/queue?limit=50')
  */
 export async function apiFetch(path, opts = {}) {
   const url = path.startsWith('http') ? path : `${API_BASE}${path}`
-  const token = await getToken()
-
-  const headers = new Headers(opts.headers || {})
-  headers.set('Content-Type', 'application/json')
-  if (token) headers.set('Authorization', `Bearer ${token}`)
-
-  const res = await fetch(url, { ...opts, headers, credentials: 'include' })
-  // Optional: quick debug if needed
-  // console.debug('apiFetch', { url, status: res.status })
-
-  // normalize JSON
-  let body = null
-  const text = await res.text()
-  try { body = text ? JSON.parse(text) : null } catch { body = { ok:false, error:'bad_json', raw:text } }
-
-  if (!res.ok) {
-    // bubble up 401 for the AuthBanner to show
-    const err = new Error(body?.error || `http_${res.status}`)
-    err.status = res.status
-    err.body = body
-    throw err
+  const hdr = await authHeader()
+  const res = await fetch(url, {
+    credentials: 'include',
+    ...opts,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(opts.headers || {}),
+      ...hdr
+    }
+  })
+  // Normalize 401 into a readable error
+  if (res.status === 401 || res.status === 403) {
+    const t = await res.text().catch(() => '')
+    throw new Error('unauthorized' + (t ? `: ${t}` : ''))
   }
-  return body
+  const ct = res.headers.get('content-type') || ''
+  return ct.includes('application/json') ? res.json() : res.text()
 }
-
-// Convenience helpers
-export const get = (p) => apiFetch(p, { method: 'GET' })
-export const post = (p, json) => apiFetch(p, { method: 'POST', body: JSON.stringify(json || {}) })
-export const put = (p, json) => apiFetch(p, { method: 'PUT', body: JSON.stringify(json || {}) })
-export const del = (p) => apiFetch(p, { method: 'DELETE' })
