@@ -1,9 +1,6 @@
-// frontend/src/lib/apiFetch.js
-import { supa } from './supa'   // <-- use the single shared client
+import { supa } from './supa'
 
-// Base URL for backend API (Render, local, etc.)
-const API_BASE =
-  import.meta.env.VITE_API_BASE?.replace(/\/+$/, '') || 'http://localhost:8787'
+const API_BASE = (import.meta.env.VITE_API_BASE || 'http://localhost:8787').replace(/\/+$/, '')
 
 async function authHeader() {
   const { data } = await supa.auth.getSession()
@@ -11,29 +8,18 @@ async function authHeader() {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-/**
- * apiFetch(path, options)
- * Example: apiFetch('/api/queue?limit=50')
- */
 export async function apiFetch(path, opts = {}) {
   const url = path.startsWith('http') ? path : `${API_BASE}${path}`
   const hdr = await authHeader()
-
   const res = await fetch(url, {
     credentials: 'include',
     ...opts,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(opts.headers || {}),
-      ...hdr,
-    },
+    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}), ...hdr }
   })
-
   if (res.status === 401 || res.status === 403) {
     const t = await res.text().catch(() => '')
     throw new Error('unauthorized' + (t ? `: ${t}` : ''))
   }
-
   const ct = res.headers.get('content-type') || ''
   return ct.includes('application/json') ? res.json() : res.text()
 }

@@ -1,4 +1,3 @@
-// frontend/src/pages/Settings.jsx
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../lib/apiFetch";
 
@@ -90,40 +89,32 @@ export default function Settings() {
     })();
   }, []);
 
-  const onNum  = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value === "" ? "" : toNum(e.target.value) }));
+  const onNum  = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value === "" ? "" : Number(e.target.value) }));
   const onText = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
   const onBool = (key) => (e) => setForm((f) => ({ ...f, [key]: !!e.target.checked }));
   const onMix  = (key) => (e) => {
-    const v = Math.max(0, Math.min(100, toNum(e.target.value)));
+    const v = Math.max(0, Math.min(100, Number(e.target.value)));
     setForm((f) => ({ ...f, platform_mix: { ...f.platform_mix, [key]: v } }));
   };
 
-  // Keep global cap within sum of platform caps automatically
   function clampDailyCap(next) {
-    const n = Math.max(0, toNum(next));
-    const sumPlatformMax = toNum(form.cap_linkedin) + toNum(form.cap_instagram) + toNum(form.cap_facebook);
-    setForm((f) => ({ ...f, daily_cap: Math.min(n, sumPlatformMax) }));
+    const n = Math.max(0, Number(next))
+    const sumPlatformMax = Number(form.cap_linkedin) + Number(form.cap_instagram) + Number(form.cap_facebook)
+    setForm((f) => ({ ...f, daily_cap: Math.min(n, sumPlatformMax) }))
   }
 
   const save = async () => {
     setSaving(true);
     setMsg("");
     try {
-      const json = await apiFetch("/api/app-settings", {
-        method: "POST",
-        body: JSON.stringify(form)
-      });
+      const json = await apiFetch("/api/app-settings", { method: "POST", body: JSON.stringify(form) });
       if (!json.ok) throw new Error(json.error || "save_failed");
       setForm((f) => ({ ...f, ...json.settings }));
       setMsg(json.plan?.capExceeded
         ? `Saved. Plan exceeds safe capacity by ${json.plan.shortfall} per day.`
         : "Saved.");
-    } catch (e) {
-      setMsg("Save failed: " + (e.message || "unknown"));
-    } finally {
-      setSaving(false);
-      setTimeout(() => setMsg(""), 3000);
-    }
+    } catch (e) { setMsg("Save failed: " + (e.message || "unknown")); }
+    finally { setSaving(false); setTimeout(() => setMsg(""), 3000); }
   };
 
   const mix = form.platform_mix || { linkedin: 0, instagram: 0, facebook: 0 };
@@ -136,9 +127,9 @@ export default function Settings() {
     facebook: Math.floor((form.daily_cap * (mix.facebook || 0)) / 100)
   };
   const overages = {
-    linkedin: Math.max(0, plannedByPlatform.linkedin - toNum(form.cap_linkedin)),
-    instagram: Math.max(0, plannedByPlatform.instagram - toNum(form.cap_instagram)),
-    facebook: Math.max(0, plannedByPlatform.facebook - toNum(form.cap_facebook))
+    linkedin: Math.max(0, plannedByPlatform.linkedin - Number(form.cap_linkedin)),
+    instagram: Math.max(0, plannedByPlatform.instagram - Number(form.cap_instagram)),
+    facebook: Math.max(0, plannedByPlatform.facebook - Number(form.cap_facebook))
   };
 
   return (
@@ -211,21 +202,21 @@ export default function Settings() {
           : <div style={{ color:"#7ad17a", marginTop:6 }}>Within safe capacity.</div>
         }
 
-        <Rule />
+        <div style={{ borderTop:"1px solid rgba(255,255,255,.15)", margin:"16px 0" }} />
 
         <h3 style={{ marginTop:0 }}>Safe daily by platform</h3>
         <div>LinkedIn: <strong>{plan.perPlatform.linkedin}</strong> (cap {form.cap_linkedin})</div>
         <div>Instagram: <strong>{plan.perPlatform.instagram}</strong> (cap {form.cap_instagram})</div>
         <div>Facebook: <strong>{plan.perPlatform.facebook}</strong> (cap {form.cap_facebook})</div>
 
-        <Rule />
+        <div style={{ borderTop:"1px solid rgba(255,255,255,.15)", margin:"16px 0" }} />
 
         <h3 style={{ marginTop:0 }}>Social connections</h3>
         <ConnRow label="Facebook" ok={conns.facebook} href={"/oauth/meta/login"} />
         <ConnRow label="Instagram" ok={conns.instagram} href={"/oauth/meta/login"} />
         <ConnRow label="LinkedIn" ok={conns.linkedin} href={"/oauth/linkedin/login"} />
 
-        <Rule />
+        <div style={{ borderTop:"1px solid rgba(255,255,255,.15)", margin:"16px 0" }} />
 
         <h3 style={{ marginTop:0 }}>LinkedIn daily batch</h3>
         <label style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
@@ -248,7 +239,6 @@ function ConnRow({ label, ok, href }) {
     </div>
   );
 }
-
 function Field({ title, children }) {
   return (
     <label style={{ display:"block", marginBottom:8 }}>
@@ -257,15 +247,6 @@ function Field({ title, children }) {
     </label>
   );
 }
-
 function Grid2({ children }) {
-  return (
-    <div style={{ display:"grid", gridTemplateColumns:"auto 140px", gap:8, marginTop:6 }}>
-      {children}
-    </div>
-  );
-}
-
-function Rule() {
-  return <div style={{ borderTop:"1px solid rgba(255,255,255,.15)", margin:"16px 0" }} />;
+  return <div style={{ display:"grid", gridTemplateColumns:"auto 140px", gap:8, marginTop:6 }}>{children}</div>;
 }

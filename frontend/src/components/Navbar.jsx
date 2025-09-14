@@ -1,80 +1,53 @@
-// frontend/src/components/Navbar.jsx
-import { Link, useLocation } from 'react-router-dom'
-import { supa } from '../lib/supa'
+import { Link, useLocation } from "react-router-dom"
 
 const links = [
-  { to: '/',          label: 'Dashboard' },
-  { to: '/approvals', label: 'Approvals' },
-  { to: '/queue',     label: 'Queue' },
-  { to: '/leads',     label: 'Leads' },
-  { to: '/settings',  label: 'Settings' },
+  { to: "/", label: "Dashboard" },
+  { to: "/approvals", label: "Approvals" },
+  { to: "/queue", label: "Queue" },
+  { to: "/leads", label: "Leads" },
+  { to: "/settings", label: "Settings" }
 ]
 
 export default function Navbar() {
   const { pathname } = useLocation()
-
-  const Pill = ({ to, label }) => {
-    const active = pathname === to
-    // Inactive: green fill, gold text + gold border
-    // Active: gold fill, dark text + gold border (reverse)
-    const base = {
-      padding: '6px 14px',
-      borderRadius: 6,
-      textDecoration: 'none',
-      fontWeight: 700,
-      border: '1px solid #ffd700',
-      transition: '0.15s ease-in-out',
-    }
-    const style = active
-      ? { ...base, background: '#ffd700', color: '#0c0c0c' }
-      : { ...base, background: '#0c6133', color: '#ffd700' }
-    return <Link to={to} style={style}>{label}</Link>
-  }
-
-  const logout = async () => { await supa.auth.signOut(); location.assign('/login') }
+  const logoUrl = `${import.meta.env.BASE_URL || '/'}ue-logo.png` // in /public
 
   return (
-    <header style={{
-      background: '#0c0c0c',
-      borderBottom: '1px solid rgba(255,215,0,.25)',
-      padding: '10px 16px',
-      position: 'sticky', top: 0, zIndex: 50
-    }}>
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: '1fr auto 1fr',
-        alignItems: 'center',
-        gap: 12
-      }}>
-        {/* LEFT: brand */}
-        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-          <img src={'/ue-logo.png.PNG'} alt="EmpireRise logo" style={{ height: 26 }} />
-          <span style={{ fontWeight: 800, letterSpacing: .5, color:'#ffd700' }}>EMPIRE RISE</span>
+    <header style={{ background:"#0c0c0c", borderBottom:"1px solid rgba(255,215,0,.25)", padding:"10px 16px" }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12 }}>
+        {/* Left: brand */}
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          <img src={logoUrl} alt="EmpireRise logo" style={{ height:24 }} />
+          <span style={{ fontWeight:"bold", letterSpacing:1, color:"#ffd700" }}>EMPIRE RISE</span>
         </div>
 
-        {/* CENTER: pills */}
-        <nav style={{ display:'flex', gap:12, justifyContent:'center' }}>
-          {links.map(l => <Pill key={l.to} {...l} />)}
+        {/* Center: pills */}
+        <nav style={{ display:"flex", gap:10 }}>
+          {links.map(l => {
+            const active = pathname === l.to
+            return (
+              <Link
+                key={l.to}
+                to={l.to}
+                style={{
+                  padding:"6px 14px",
+                  borderRadius:6,
+                  textDecoration:"none",
+                  border:"1px solid #ffd700",
+                  fontWeight:700,
+                  background: active ? "#ffd700" : "#0e4d1b",
+                  color: active ? "#0c0c0c" : "#ffd700",
+                  boxShadow: "inset 0 0 0 1px rgba(0,0,0,.25)"
+                }}
+              >
+                {l.label}
+              </Link>
+            )
+          })}
         </nav>
 
-        {/* RIGHT: Powered by + Logout */}
-        <div style={{ display:'flex', alignItems:'center', gap:12, justifyContent:'flex-end' }}>
-          <span style={{ fontSize:12, color:'#ffd700', opacity:.85 }}>Powered by A SmartBass</span>
-          <button
-            onClick={logout}
-            style={{
-              padding:'6px 12px',
-              borderRadius: 6,
-              border: '1px solid #ffd700',
-              background: '#0c6133',
-              color: '#ffd700',
-              fontWeight: 700,
-              cursor: 'pointer'
-            }}
-          >
-            Logout
-          </button>
-        </div>
+        {/* Right: tagline */}
+        <div style={{ fontSize:12, color:"#ffd700", opacity:.9 }}>Powered by A SmartBass</div>
       </div>
     </header>
   )

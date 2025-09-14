@@ -1,17 +1,14 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useSession, AuthBanner } from './components/AuthGate'
+import Navbar from './components/Navbar'
 
 // pages
 import Dashboard from './pages/Dashboard'
 import Approvals from './pages/Approvals'
 import Queue from './pages/Queue'
 import Leads from './pages/Leads'
-import AssistLI from './pages/AssistLI'
-import Login from './pages/Login'
-import Settings from './pages/Settings'   // ✅ ADD THIS
-
-// navbar
-import Navbar from './components/Navbar'
+import Settings from './pages/Settings'
+import Login from './pages/Login'   // your existing Login.jsx
 
 export default function App() {
   const { ready, session } = useSession()
@@ -32,8 +29,7 @@ export default function App() {
           <Route path="/approvals" element={<Private><Approvals/></Private>} />
           <Route path="/queue" element={<Private><Queue/></Private>} />
           <Route path="/leads" element={<Private><Leads/></Private>} />
-          <Route path="/assist-li" element={<Private><AssistLI/></Private>} />
-          <Route path="/settings" element={<Private><Settings/></Private>} /> {/* ✅ protect and works */}
+          <Route path="/settings" element={<Private><Settings/></Private>} />
           {/* fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
