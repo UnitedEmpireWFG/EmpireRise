@@ -1,8 +1,10 @@
+// backend/server.js
 /* backend/server.js */
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
+const APP_ORIGIN = (process.env.APP_ORIGIN || process.env.ORIGIN_APP || '').replace(/\/+$/,'')
 
 import reqlog from './middleware/reqlog.js'
 import { maybeBypass, requireAuth, requireAdmin } from './middleware/auth.js'
@@ -94,7 +96,7 @@ app.use((_, res, next) => {
 })
 
 /* ---------- CORS (tight) ---------- */
-const NETLIFY_ORIGIN = (process.env.ORIGIN_APP || '').replace(/\/+$/,'') // e.g. https://empirerise.netlify.app
+const NETLIFY_ORIGIN = (process.env.ORIGIN_APP || '').replace(/\/+$/,'')
 const allowList = [ NETLIFY_ORIGIN, 'http://localhost:5173', 'http://localhost:8787' ].filter(Boolean)
 function isAllowedOrigin(origin) {
   if (!origin) return true
@@ -130,19 +132,29 @@ app.use('/api/health', health)
 app.use('/api/health/full', healthFull)
 app.use('/auth', auth)
 
-// OAuth & webhooks are PUBLIC (callbacks often come without our auth header)
+/* OAuth and webhooks are public */
 app.use('/oauth/meta', oauthMeta)
 app.use('/oauth/linkedin', oauthLinkedIn)
 app.use('/webhooks/meta', metaWebhooks)
 app.use('/webhooks/linkedin', linkedinInbound)
 
-// simple public root + ping
+/* simple public root + ping */
 app.get('/', (_req, res) => res.json({ ok:true, name:'EmpireRise API' }))
 app.get('/auth/ping', (_req, res) => res.json({ ok:true }))
 
+/* ---------- Frontend redirects on API host ---------- */
+app.get('/settings', (_req, res) => {
+  if (!APP_ORIGIN) return res.status(404).json({ ok:false, error:'set APP_ORIGIN' })
+  res.redirect(`${APP_ORIGIN}/settings`)
+})
+app.get('/login', (_req, res) => {
+  if (!APP_ORIGIN) return res.status(404).json({ ok:false, error:'set APP_ORIGIN' })
+  res.redirect(`${APP_ORIGIN}/login`)
+})
+
 /* ---------- AUTH WALL for /api/** ONLY ---------- */
-app.use(maybeBypass)               // harmless unless AUTH_BYPASS=true
-app.use('/api', requireAuth)       // protect everything under /api
+app.use(maybeBypass)
+app.use('/api', requireAuth)
 
 /* ---------- PROTECTED MOUNTS (/api/...) ---------- */
 app.use('/api/meta', metaIds)
@@ -178,8 +190,14 @@ app.use('/api', threadsRouter)
 app.use('/api', offersRouter)
 app.use('/api', misc)
 
-// admin endpoints under /api/admin and require admin
+/* admin endpoints under /api/admin and require admin */
 app.use('/api/admin', requireAdmin, adminUsersRouter)
+
+/* extra routers */
+app.use('/api/batch', liBatchRouter)
+app.use('/api/queue-bulk', queueBulkRouter)
+app.use('/api/prospects', prospectsRouter)
+app.use('/api/resolve', resolverRouter)
 
 /* ---------- EXAMPLES ---------- */
 app.get('/api/test/ai', async (_req, res) => {
@@ -208,16 +226,6 @@ app.listen(port, () => {
   console.log(`EmpireRise API on ${port}`)
   console.log('Auth bypass:', String(process.env.AUTH_BYPASS || 'false'))
   console.log('Work window policy:', timePolicy._cfg)
-
-  // Jobs
-  startBirthdayCron()
-  startFollowupsCron()
-  startSourcingCron()
-  startNightlyDraftsCron()
-  startGrowthScheduler()
-  startLearningCron()
-  startGhostNudgesCron()
-  startABHousekeepingCron()
 
   const safeInitLiBatch = () => {
     try { initLiDailyBatch(globalUserCache); console.log('liDailyBatch initialized') }
