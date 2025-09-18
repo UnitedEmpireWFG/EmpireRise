@@ -1,103 +1,86 @@
-// backend/routes/oauth_linkedin.js
 import express from 'express'
+import { createRemoteJWKSet, jwtVerify } from 'jose'
 import fetch from 'node-fetch'
-import * as jose from 'jose'
-import { supaAdmin } from '../db.js'
+import { supa } from '../db.js'
 
 const router = express.Router()
 
-const APP_ORIGIN = (process.env.APP_ORIGIN || process.env.ORIGIN_APP || '').replace(/\/+$/,'')
-const LINKEDIN_CLIENT_ID     = process.env.LINKEDIN_CLIENT_ID
-const LINKEDIN_CLIENT_SECRET = process.env.LINKEDIN_CLIENT_SECRET
-const LINKEDIN_REDIRECT      = (process.env.LINKEDIN_REDIRECT || '').replace(/\/+$/, '')
-const LINKEDIN_SCOPES        = (process.env.LINKEDIN_SCOPES || 'r_liteprofile r_emailaddress')
-  .split(/[ ,]+/).filter(Boolean).join(' ')
-const JWKS_URL = process.env.SUPABASE_JWKS_URL || (process.env.SUPABASE_URL
-  ? `${process.env.SUPABASE_URL.replace(/\/+$/,'')}/auth/v1/keys` : null)
+const LI_AUTH = 'https://www.linkedin.com/oauth/v2/authorization'
+const LI_TOKEN = 'https://www.linkedin.com/oauth/v2/accessToken'
+const CLIENT_ID = process.env.LI_CLIENT_ID
+const CLIENT_SECRET = process.env.LI_CLIENT_SECRET
+const REDIRECT = process.env.LI_REDIRECT || 'https://empirerise.onrender.com/oauth/linkedin/callback'
+const APP_ORIGIN = (process.env.APP_ORIGIN || process.env.ORIGIN_APP || '').replace(/\/+$/,'') || 'https://empirerise.netlify.app'
 
-const AUTH_URL   = 'https://www.linkedin.com/oauth/v2/authorization'
-const TOKEN_URL  = 'https://www.linkedin.com/oauth/v2/accessToken'
-const ME_URL     = 'https://api.linkedin.com/v2/userinfo'
-const EMAIL_URL  = 'https://api.linkedin.com/v2/emailAddress?q=members&projection=(elements*(handle~))'
-
-function must(name, v) { if (!v) throw new Error(`env_missing:${name}`) }
-async function verifySupabaseJWT(token) {
-  if (!JWKS_URL) throw new Error('jwks_not_configured')
-  const JWKS = jose.createRemoteJWKSet(new URL(JWKS_URL))
-  const { payload } = await jose.jwtVerify(token, JWKS, { })
-  return payload
+// verify Supabase JWT in the "state" parameter to get user_id
+const JWKS_URL = process.env.SUPABASE_JWKS_URL
+const JWKS = JWKS_URL ? createRemoteJWKSet(new URL(JWKS_URL)) : null
+async function getUserIdFromState(state) {
+  if (!state) throw new Error('missing_state')
+  if (!JWKS) throw new Error('jwks_not_configured')
+  const { payload } = await jwtVerify(state, JWKS, { algorithms: ['RS256'] })
+  // sub is the user_id for Supabase JWTs
+  return payload?.sub || payload?.user_id || null
 }
 
-// GET /oauth/linkedin/login?state=<supabase_access_token>
-router.get('/login', (req, res) => {
+// Step 1: redirect user to LinkedIn
+router.get('/login', async (req, res) => {
   try {
-    const { state = '' } = req.query
-    must('LINKEDIN_CLIENT_ID', LINKEDIN_CLIENT_ID)
-    must('LINKEDIN_REDIRECT', LINKEDIN_REDIRECT)
-
-    const url = new URL(AUTH_URL)
+    const state = String(req.query.state || '') || Math.random().toString(36).slice(2)
+    const url = new URL(LI_AUTH)
     url.searchParams.set('response_type', 'code')
-    url.searchParams.set('client_id', LINKEDIN_CLIENT_ID)
-    url.searchParams.set('redirect_uri', LINKEDIN_REDIRECT)
-    url.searchParams.set('scope', LINKEDIN_SCOPES)
-    if (state) url.searchParams.set('state', state)
-
+    url.searchParams.set('client_id', CLIENT_ID)
+    url.searchParams.set('redirect_uri', REDIRECT)
+    // Keep scopes minimal for login + posting
+    url.searchParams.set('scope', 'openid profile email r_liteprofile r_emailaddress w_member_social')
+    url.searchParams.set('state', state)
     return res.redirect(url.toString())
   } catch (e) {
-    return res.redirect(`${APP_ORIGIN}/settings?error=${encodeURIComponent(e.message)}`)
+    console.log('linkedin_login_error', e?.message)
+    return res.status(302).redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=login_failed`)
   }
 })
 
-// GET /oauth/linkedin/callback?code=...&state=<supabase_access_token>
+// Step 2: LinkedIn redirects back here with ?code=&state=
 router.get('/callback', async (req, res) => {
+  const { code = '', state = '' } = req.query || {}
   try {
-    const code = req.query.code
-    if (!code) throw new Error('missing_code')
+    // 1) identify user from state (Supabase JWT)
+    const userId = await getUserIdFromState(String(state))
+    if (!userId) throw new Error('user_not_identified')
 
-    must('LINKEDIN_CLIENT_ID', LINKEDIN_CLIENT_ID)
-    must('LINKEDIN_CLIENT_SECRET', LINKEDIN_CLIENT_SECRET)
-    must('LINKEDIN_REDIRECT', LINKEDIN_REDIRECT)
-
-    const jwt = String(req.query.state || '')
-    if (!jwt) throw new Error('missing_state_jwt')
-
-    const supaPayload = await verifySupabaseJWT(jwt)
-    const userId = supaPayload.sub || supaPayload.user_id
-    if (!userId) throw new Error('no_user_in_token')
-
+    // 2) exchange code for access token
     const body = new URLSearchParams({
       grant_type: 'authorization_code',
-      code,
-      redirect_uri: LINKEDIN_REDIRECT,
-      client_id: LINKEDIN_CLIENT_ID,
-      client_secret: LINKEDIN_CLIENT_SECRET
+      code: String(code),
+      redirect_uri: REDIRECT,
+      client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET
     })
-    const tres = await fetch(TOKEN_URL, {
+    const tr = await fetch(LI_TOKEN, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body
     })
-    if (!tres.ok) throw new Error(`token_http_${tres.status}`)
-    const tok = await tres.json()
-    if (!tok.access_token) throw new Error('no_access_token')
+    if (!tr.ok) {
+      const text = await tr.text().catch(()=> '')
+      throw new Error(`token_http_${tr.status}:${text.slice(0,200)}`)
+    }
+    const tokenJson = await tr.json()
+    const accessToken = tokenJson?.access_token
+    if (!accessToken) throw new Error('no_access_token')
 
-    const hdr = { Authorization: `Bearer ${tok.access_token}` }
-    const meRes = await fetch(ME_URL, { headers: hdr })
-    const me = meRes.ok ? await meRes.json() : {}
-    const emRes = await fetch(EMAIL_URL, { headers: hdr })
-    const email = emRes.ok ? await emRes.json() : {}
+    // 3) upsert into app_settings keyed by user_id
+    const { error: upErr } = await supa
+      .from('app_settings')
+      .upsert({ user_id: userId, linkedin_access_token: accessToken }, { onConflict: 'user_id' })
+    if (upErr) throw upErr
 
-    await supaAdmin.from('app_settings').upsert({
-      user_id: userId,
-      linkedin_access_token: tok.access_token,
-      linkedin_profile: me,
-      linkedin_email: email,
-      updated_at: new Date().toISOString()
-    }, { onConflict: 'user_id' })
-
-    return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=true`)
+    console.log('linkedin_callback_ok', userId)
+    return res.status(302).redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=true`)
   } catch (e) {
-    return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=${encodeURIComponent(e.message)}`)
+    console.log('linkedin_callback_error', e?.message)
+    return res.status(302).redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=${encodeURIComponent(String(e?.message || 'callback_failed'))}`)
   }
 })
 
