@@ -1,12 +1,7 @@
-// frontend/src/pages/Settings.jsx
 import { useEffect, useState } from 'react'
-import { createClient } from '@supabase/supabase-js'
+import { supa, requireToken } from '../lib/supa'
 
 const API = import.meta.env.VITE_API_BASE || 'https://empirerise.onrender.com'
-const supa = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-)
 
 function openPopup(url) {
   const w = 600, h = 700
@@ -18,11 +13,6 @@ function openPopup(url) {
   })
 }
 
-async function getAccessToken() {
-  const { data: { session } } = await supa.auth.getSession()
-  return session?.access_token || ''
-}
-
 export default function Settings() {
   const [li, setLi] = useState(false)
   const [fb, setFb] = useState(false)
@@ -31,8 +21,7 @@ export default function Settings() {
 
   async function refresh() {
     try {
-      const token = await getAccessToken()
-      if (!token) throw new Error('no_token')
+      const token = await requireToken()
       const r = await fetch(`${API}/api/app-settings/me`, {
         headers: { Authorization: `Bearer ${token}` },
         credentials: 'include'
@@ -51,17 +40,17 @@ export default function Settings() {
   useEffect(() => { refresh() }, [])
 
   async function connectLinkedIn() {
-    const token = await getAccessToken()
+    const token = await requireToken()
     await openPopup(`${API}/oauth/linkedin/login?state=${encodeURIComponent(token)}`)
     await refresh()
   }
   async function connectFacebook() {
-    const token = await getAccessToken()
+    const token = await requireToken()
     await openPopup(`${API}/oauth/meta/login?platform=facebook&state=${encodeURIComponent(token)}`)
     await refresh()
   }
   async function connectInstagram() {
-    const token = await getAccessToken()
+    const token = await requireToken()
     await openPopup(`${API}/oauth/meta/login?platform=instagram&state=${encodeURIComponent(token)}`)
     await refresh()
   }
