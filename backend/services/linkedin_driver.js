@@ -1,146 +1,153 @@
 import { chromium } from 'playwright'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import pRetry from 'p-retry'
+import { normalize, looksCanadian, notInExcluded } from '../services/filters/smart_canada.js'
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+const wait = (ms) => new Promise(r => setTimeout(r, ms))
+const bool = (v, d=false) => String(v ?? d).toLowerCase() === 'true'
+const num  = (v, d=0) => (Number(v) || d)
 
-export class LinkedInDriver {
+export class LinkedInSmart {
   constructor(opts = {}) {
-    this.headful = String(process.env.LI_HEADFUL || 'false') === 'true'
-    this.slowMo = Number(process.env.LI_SLOW_MO_MS || 0) || 0
+    this.headful = bool(process.env.LI_HEADFUL, false)
+    this.slowMo  = num(process.env.LI_SLOW_MO_MS, 0)
+    this.browser = null
     this.context = null
     this.page = null
-    this.browser = null
     this.ready = false
-    this.opts = opts
+    this.opts = opts   // { cookiesPath?: string }
   }
 
-  async _newBrowser() {
-    // If your host blocks sandbox, uncomment:
-    // return chromium.launch({ headless: !this.headful, slowMo: this.slowMo, args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage'] })
-    return chromium.launch({ headless: !this.headful, slowMo: this.slowMo })
+  async launch() {
+    this.browser = await chromium.launch({ headless: !this.headful, slowMo: this.slowMo })
+    this.context = await this.browser.newContext({ viewport: { width: 1420, height: 900 } })
+    this.page = await this.context.newPage()
   }
 
-  async _cookiesFromPath() {
-    const p = process.env.LI_COOKIES_PATH
+  async _cookiesFromPath(overridePath) {
+    const p = overridePath || process.env.LI_COOKIES_PATH
     if (!p) return null
     try {
-      const full = path.resolve(p)
-      const raw = await fs.readFile(full, 'utf-8')
+      const raw = await fs.readFile(path.resolve(p), 'utf-8')
       const arr = JSON.parse(raw)
-      if (Array.isArray(arr)) return arr
-    } catch {}
-    return null
+      return Array.isArray(arr) ? arr : null
+    } catch { return null }
+  }
+
+  async _isLoggedIn() {
+    try {
+      await this.page.waitForURL(/linkedin\.com\/(feed|mynetwork)/, { timeout: 7000 })
+      return true
+    } catch { return false }
   }
 
   async init() {
     if (this.ready) return
-    this.browser = await this._newBrowser()
-    this.context = await this.browser.newContext({
-      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari',
-      viewport: { width: 1420, height: 900 }
-    })
-    this.page = await this.context.newPage()
+    if (!this.browser) await this.launch()
 
-    // Cookie-first
+    // Try per-user cookies first
+    const perUserCookies = await this._cookiesFromPath(this.opts.cookiesPath)
+    if (perUserCookies) {
+      await this.context.addCookies(perUserCookies.map(c => ({
+        ...c,
+        domain: c.domain?.startsWith('.') ? c.domain : (c.domain || '.linkedin.com')
+      })))
+      await this.page.goto('https://www.linkedin.com/mynetwork/', { waitUntil: 'domcontentloaded' })
+      if (await this._isLoggedIn()) { this.ready = true; return }
+    }
+
+    // Fallback to global cookies
     const cookies = await this._cookiesFromPath()
     if (cookies) {
       await this.context.addCookies(cookies.map(c => ({
         ...c,
         domain: c.domain?.startsWith('.') ? c.domain : (c.domain || '.linkedin.com')
       })))
-      await this.page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded' })
+      await this.page.goto('https://www.linkedin.com/mynetwork/', { waitUntil: 'domcontentloaded' })
       if (await this._isLoggedIn()) { this.ready = true; return }
     }
 
-    // Fallback: password (one-time to capture cookies)
-    const email = process.env.LI_EMAIL
-    const password = process.env.LI_PASSWORD
-    if (email && password) {
-      await this._loginWithPassword(email, password)
-      this.ready = true
-      return
+    throw new Error('linkedin_auth_missing')
+  }
+
+  async _extractProfileMetaFromCard(card) {
+    const link = await card.locator('a[href*="/in/"]').first().getAttribute('href').catch(()=>null)
+    const match = link?.match(/linkedin\.com\/in\/([^\/?#]+)/)
+    const handle = match ? decodeURIComponent(match[1]) : null
+
+    const name = (await card.locator('[data-test-reusable-connection-suggestion-full-name]').first().textContent().catch(()=>''))?.trim() || ''
+    const headline = (await card.locator('[data-test-reusable-connection-suggestion-headline]').first().textContent().catch(()=>''))?.trim() || ''
+    const location = (await card.locator('[data-test-reusable-connection-suggestion-subdescription]').first().textContent().catch(()=>''))?.trim() || ''
+    const openBadge = await card.locator('span:has-text("Open to work")').count().catch(()=>0)
+
+    return {
+      handle,
+      name,
+      headline,
+      location,
+      open_to_work: openBadge > 0
+    }
+  }
+
+  async suggestedPeopleCanada(limit = 50) {
+    await this.init()
+    const excludeCSV = process.env.LI_EXCLUDE_TERMS || ''
+    const preferOTW = bool(process.env.LI_PREFER_OPEN_TO_WORK, true)
+
+    const out = []
+    for (let scroll=0; scroll<8 && out.length < limit; scroll++) {
+      const cards = await this.page.locator('[data-test-reusable-connection-suggestion-card]').all()
+      for (const card of cards) {
+        const meta = await this._extractProfileMetaFromCard(card)
+        if (!meta.handle) continue
+
+        const canadian = looksCanadian({ locationText: meta.location })
+        const clean    = notInExcluded([meta.headline, meta.location].join(' | '), excludeCSV)
+
+        if (!canadian || !clean) continue
+        out.push(meta)
+        if (out.length >= limit) break
+      }
+
+      await this.page.keyboard.press('End').catch(()=>{})
+      await wait(1200)
     }
 
-    throw new Error('linkedin_auth_missing: Provide LI_COOKIES_PATH or LI_EMAIL/LI_PASSWORD')
+    out.sort((a,b) => (b.open_to_work === true) - (a.open_to_work === true))
+    const seen = new Set()
+    return out.filter(x => !seen.has(x.handle) && seen.add(x.handle))
   }
 
-  async _isLoggedIn() {
-    try {
-      await this.page.waitForURL(/linkedin\.com\/feed/, { timeout: 7000 })
-      return true
-    } catch { return false }
-  }
-
-  async _loginWithPassword(email, password) {
-    await this.page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded' })
-    await this.page.fill('input#username', email)
-    await this.page.fill('input#password', password)
-    await Promise.all([
-      this.page.click('button[type="submit"]'),
-      this.page.waitForNavigation({ waitUntil: 'domcontentloaded' })
-    ])
-    if (!(await this._isLoggedIn())) throw new Error('linkedin_login_failed_or_challenge')
-  }
-
-  async gotoProfileByHandle(handle) {
-    const h = String(handle || '').replace(/^@/, '')
-    await this.page.goto(`https://www.linkedin.com/in/${h}/`, { waitUntil: 'domcontentloaded' })
-    await this.page.waitForTimeout(800)
-  }
-
-  async sendMessageToHandle(handle, text) {
+  async connectNoNote(handle) {
     await this.init()
-    await pRetry(async () => {
-      await this.gotoProfileByHandle(handle)
-      const msgBtn = this.page.locator('button:has-text("Message")')
-      if (await msgBtn.count() === 0) throw new Error('li_message_button_not_found')
-      await msgBtn.first().click()
-      const editor = this.page.locator('[role="textbox"]')
-      await editor.waitFor({ timeout: 8000 })
-      await editor.fill(text)
-      await sleep(300 + Math.random()*400)
-      const sendBtn = this.page.locator('button:has-text("Send")')
-      await sendBtn.first().click()
-      await this.page.waitForTimeout(1200)
-    }, { retries: 2 })
+    const h = String(handle || '').replace(/^@/,'')
+    await this.page.goto(`https://www.linkedin.com/in/${encodeURIComponent(h)}/`, { waitUntil: 'domcontentloaded' })
+    await wait(900)
+    const btn = this.page.locator('button:has-text("Connect")').first()
+    if (!(await btn.count())) throw new Error('connect_button_not_found')
+    await btn.click().catch(()=>{})
+    await wait(400)
+    const send = this.page.locator('button:has-text("Send")').last()
+    await send.click().catch(()=>{})
+    await wait(800)
     return { ok: true }
   }
 
-  // Returns [{handle, text, ts}]
-  async pollInbox(limit = 10) {
+  async isConnected(handle) {
     await this.init()
-    await this.page.goto('https://www.linkedin.com/messaging/', { waitUntil: 'domcontentloaded' })
-    const threads = this.page.locator('[data-conversation-id]')
-    await threads.first().waitFor({ timeout: 10000 }).catch(()=>{})
-
-    const out = []
-    const n = Math.min(await threads.count(), limit)
-    for (let i=0; i<n; i++) {
-      const row = threads.nth(i)
-      await row.click()
-      await this.page.waitForTimeout(600)
-      const bubbles = this.page.locator('[data-artdeco-is-focused="true"] .msg-s-message-list__event')
-      const lastIdx = (await bubbles.count()) - 1
-      if (lastIdx < 0) continue
-      const last = bubbles.nth(lastIdx)
-      const text = (await last.locator('.msg-s-event-listitem__body').textContent().catch(()=>''))?.trim() || ''
-      if (!text) continue
-      const personLink = await this.page.locator('a.msg-thread__link-to-profile').first().getAttribute('href').catch(()=>null)
-      let handle = null
-      if (personLink && /linkedin\.com\/in\/([^\/?#]+)/.test(personLink)) {
-        handle = decodeURIComponent(personLink.match(/linkedin\.com\/in\/([^\/?#]+)/)[1])
-      }
-      out.push({ handle, text, ts: Date.now() })
-    }
-    return out
+    const h = String(handle || '').replace(/^@/,'')
+    await this.page.goto(`https://www.linkedin.com/in/${encodeURIComponent(h)}/`, { waitUntil: 'domcontentloaded' })
+    await wait(800)
+    const msg = this.page.locator('button:has-text("Message")')
+    const pending = this.page.locator('button:has-text("Pending")')
+    return (await msg.count()) > 0 && (await pending.count()) === 0
   }
 
   async close() {
     try { await this.page?.close() } catch {}
     try { await this.context?.close() } catch {}
     try { await this.browser?.close() } catch {}
-    this.ready = false
   }
 }
+
+

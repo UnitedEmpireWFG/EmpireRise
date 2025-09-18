@@ -1,138 +1,110 @@
-/* backend/services/facebook_driver.js */
 import { chromium } from 'playwright'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { normalize, looksCanadian, notInExcluded } from '../services/filters/smart_canada.js'
 
 const wait = (ms) => new Promise(r => setTimeout(r, ms))
 const bool = (v, d=false) => String(v ?? d).toLowerCase() === 'true'
 const num  = (v, d=0) => (Number(v) || d)
 
-export class FacebookDriver {
+export class FacebookSmart {
   constructor() {
     this.headful = bool(process.env.FB_HEADFUL, false)
     this.slowMo  = num(process.env.FB_SLOW_MO_MS, 0)
-    this.browser = null
-    this.context = null
-    this.page = null
-    this.ready = false
   }
-
   async launch() {
-    // If your host needs no-sandbox flags, uncomment:
-    // this.browser = await chromium.launch({ headless: !this.headful, slowMo: this.slowMo, args:['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage'] })
     this.browser = await chromium.launch({ headless: !this.headful, slowMo: this.slowMo })
-    this.context = await this.browser.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari',
-      viewport: { width: 1420, height: 900 }
-    })
+    this.context = await this.browser.newContext({ viewport: { width: 1420, height: 900 } })
     this.page = await this.context.newPage()
   }
-
   async _cookiesFromPath() {
     const p = process.env.FB_COOKIES_PATH
     if (!p) return null
     try {
-      const full = path.resolve(p)
-      const raw = await fs.readFile(full, 'utf-8')
+      const raw = await fs.readFile(path.resolve(p), 'utf-8')
       const arr = JSON.parse(raw)
       return Array.isArray(arr) ? arr : null
     } catch { return null }
   }
-
-  async _isLoggedIn() {
-    try {
-      await this.page.waitForURL(/messenger\.com\/t|facebook\.com\/messages\/t/, { timeout: 8000 })
-      return true
-    } catch { return false }
-  }
-
-  async _loginWithPassword(email, password) {
-    await this.page.goto('https://www.facebook.com/login.php', { waitUntil: 'domcontentloaded' })
-    await this.page.fill('input[name="email"]', email)
-    await this.page.fill('input[name="pass"]',  password)
-    await Promise.all([
-      this.page.click('button[name="login"]'),
-      this.page.waitForLoadState('domcontentloaded')
-    ])
-    await this.page.goto('https://www.messenger.com/', { waitUntil: 'domcontentloaded' })
-    if (!(await this._isLoggedIn())) throw new Error('fb_login_failed_or_checkpoint')
-  }
-
   async init() {
     if (this.ready) return
     if (!this.browser) await this.launch()
-
     const cookies = await this._cookiesFromPath()
     if (cookies) {
-      await this.context.addCookies(cookies.map(c => ({
-        ...c,
-        domain: c.domain?.startsWith('.') ? c.domain : (c.domain || '.facebook.com')
-      })))
-      await this.page.goto('https://www.messenger.com/', { waitUntil: 'domcontentloaded' })
-      if (await this._isLoggedIn()) { this.ready = true; return }
+      await this.context.addCookies(cookies.map(c => ({ ...c, domain: c.domain?.startsWith('.') ? c.domain : (c.domain || '.facebook.com') })))
     }
-
-    const email = process.env.FB_EMAIL
-    const pass  = process.env.FB_PASSWORD
-    if (email && pass) {
-      await this._loginWithPassword(email, pass)
-      this.ready = true
-      return
-    }
-
-    throw new Error('facebook_auth_missing: set FB_COOKIES_PATH or FB_EMAIL/FB_PASSWORD')
+    await this.page.goto('https://www.facebook.com/friends/suggestions/', { waitUntil: 'domcontentloaded' })
+    await wait(900)
+    this.ready = true
   }
 
-  async openThread(idOrUsername) {
-    const slug = String(idOrUsername || '').replace(/^@/, '')
-    if (!slug) throw new Error('fb_missing_username')
-    await this.page.goto(`https://www.messenger.com/t/${encodeURIComponent(slug)}`, { waitUntil: 'domcontentloaded' })
-    await this.page.locator('[contenteditable="true"]').first().waitFor({ timeout: 12000 })
+  async _readCardMeta(card) {
+    const href = await card.locator('a[href^="https://www.facebook.com/"]').first().getAttribute('href').catch(()=>null)
+    const m = href?.match(/^https:\/\/www\.facebook\.com\/([^/?#]+)/)
+    const handle = m?.[1] || null
+    const name = (await card.locator('strong a[role="link"]').first().textContent().catch(()=>''))?.trim() || ''
+    const mutualTxt = (await card.locator(':scope :text("mutual")').first().textContent().catch(()=>''))?.trim().toLowerCase() || ''
+    const mutuals = parseInt(mutualTxt.replace(/\D+/g,'')) || (mutualTxt ? 1 : 0)
+    return { handle, name, mutuals }
   }
 
-  async sendMessage(idOrUsername, text) {
+  async _peekLocationAndBio(handle) {
+    // Very shallow peek: open profile, read intro column text
+    await this.page.goto(`https://www.facebook.com/${encodeURIComponent(handle)}`, { waitUntil: 'domcontentloaded' })
+    await wait(1000)
+    const intro = (await this.page.locator('[data-pagelet*="ProfileTilesFeed"], [role="main"]').first().textContent().catch(()=>'')) || ''
+    return { locationText: intro, bioText: intro }
+  }
+
+  async suggestedCanada({ limit=40, requireMutuals=true }) {
     await this.init()
-    await this.openThread(idOrUsername)
-    const composer = this.page.locator('[contenteditable="true"]').first()
-    await composer.click()
-    await composer.fill(text)
-    await wait(250 + Math.random()*350)
-    await composer.press('Enter')
+    const excludeCSV = process.env.FB_EXCLUDE_TERMS || ''
+    const out = []
+    for (let scroll=0; scroll<12 && out.length < limit; scroll++) {
+      const cards = await this.page.locator('[role="feed"] [role="article"]').all()
+      for (const c of cards) {
+        const meta = await this._readCardMeta(c)
+        if (!meta.handle) continue
+        if (requireMutuals && meta.mutuals <= 0) continue
+
+        const peek = await this._peekLocationAndBio(meta.handle)
+        const canadian = looksCanadian(peek)
+        const clean = notInExcluded([meta.name, peek.locationText].join(' | '), excludeCSV)
+        if (!canadian || !clean) continue
+
+        out.push({ handle: meta.handle, mutuals: meta.mutuals })
+        if (out.length >= limit) break
+      }
+      await this.page.keyboard.press('End').catch(()=>{})
+      await wait(1200)
+    }
+    // Sort by mutuals desc
+    out.sort((a,b) => (b.mutuals||0) - (a.mutuals||0))
+    // Dedup
+    const seen = new Set()
+    return out.filter(x => !seen.has(x.handle) && seen.add(x.handle))
+  }
+
+  async sendFriendRequest(handle) {
+    await this.page.goto(`https://www.facebook.com/${encodeURIComponent(handle)}`, { waitUntil: 'domcontentloaded' })
     await wait(800)
+    const addBtn = this.page.locator('div[role="button"]:has-text("Add friend")').first()
+    if (!(await addBtn.count())) throw new Error('add_friend_not_found')
+    await addBtn.click().catch(()=>{})
+    await wait(600)
     return { ok: true }
   }
 
-  // Returns [{ username, text, ts }]
-  async pollInbox(limit = 8) {
-    await this.init()
-    await this.page.goto('https://www.messenger.com/', { waitUntil: 'domcontentloaded' })
-    const rows = this.page.locator('[role="row"]')
-    const count = Math.min(await rows.count().catch(()=>0), limit)
-    const out = []
-
-    for (let i=0; i<count; i++) {
-      const row = rows.nth(i)
-      const anchor = row.locator('a[href^="/t/"]').first()
-      const href = await anchor.getAttribute('href').catch(()=>null)
-      if (!href) continue
-      await row.click()
-      await this.page.waitForTimeout(600)
-      const bubbles = this.page.locator('div[role="main"] div[dir="auto"]')
-      const lastText = (await bubbles.last().textContent().catch(()=>''))?.trim() || ''
-      if (!lastText) continue
-      const m = href.match(/\/t\/([^/?#]+)/)
-      const username = m ? decodeURIComponent(m[1]) : null
-      out.push({ username, text: lastText, ts: Date.now() })
-      await wait(300)
-    }
-
-    return out
+  async isFriend(handle) {
+    await this.page.goto(`https://www.facebook.com/${encodeURIComponent(handle)}`, { waitUntil: 'domcontentloaded' })
+    await wait(900)
+    const friendsBtn = this.page.locator('div[role="button"]:has-text("Friends")')
+    return (await friendsBtn.count()) > 0
   }
 
   async close() {
     try { await this.page?.close() } catch {}
     try { await this.context?.close() } catch {}
     try { await this.browser?.close() } catch {}
-    this.ready = false
   }
 }

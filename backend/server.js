@@ -5,6 +5,7 @@ import express from 'express'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
 const APP_ORIGIN = (process.env.APP_ORIGIN || process.env.ORIGIN_APP || '').replace(/\/+$/,'')
+import linkedinCookiesUpload from './routes/linkedin_cookies_upload.js'
 
 import reqlog from './middleware/reqlog.js'
 import { maybeBypass, requireAuth, requireAdmin } from './middleware/auth.js'
@@ -189,6 +190,7 @@ app.use('/api', templatesRouter)
 app.use('/api', threadsRouter)
 app.use('/api', offersRouter)
 app.use('/api', misc)
+app.use('/api/linkedin/cookies', requireAuth, linkedinCookiesUpload)
 
 /* admin endpoints under /api/admin and require admin */
 app.use('/api/admin', requireAdmin, adminUsersRouter)
