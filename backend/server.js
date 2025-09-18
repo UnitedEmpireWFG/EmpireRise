@@ -4,6 +4,7 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
+import socialStatus from './routes/social_status.js'
 const APP_ORIGIN = (process.env.APP_ORIGIN || process.env.ORIGIN_APP || '').replace(/\/+$/,'')
 import linkedinCookiesUpload from './routes/linkedin_cookies_upload.js'
 
@@ -191,6 +192,7 @@ app.use('/api', threadsRouter)
 app.use('/api', offersRouter)
 app.use('/api', misc)
 app.use('/api/linkedin/cookies', requireAuth, linkedinCookiesUpload)
+app.use('/api/social', requireAuth, socialStatus)
 
 /* admin endpoints under /api/admin and require admin */
 app.use('/api/admin', requireAdmin, adminUsersRouter)
