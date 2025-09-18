@@ -7,7 +7,7 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms))
 const bool = (v, d=false) => String(v ?? d).toLowerCase() === 'true'
 const num  = (v, d=0) => (Number(v) || d)
 
-export class FacebookSmart {
+export class FacebookDriver {
   constructor() {
     this.headful = bool(process.env.FB_HEADFUL, false)
     this.slowMo  = num(process.env.FB_SLOW_MO_MS, 0)

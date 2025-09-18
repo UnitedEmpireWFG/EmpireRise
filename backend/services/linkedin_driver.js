@@ -7,7 +7,7 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms))
 const bool = (v, d=false) => String(v ?? d).toLowerCase() === 'true'
 const num  = (v, d=0) => (Number(v) || d)
 
-export class LinkedInSmart {
+export class LinkedInDriver {
   constructor(opts = {}) {
     this.headful = bool(process.env.LI_HEADFUL, false)
     this.slowMo  = num(process.env.LI_SLOW_MO_MS, 0)

@@ -7,7 +7,7 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms))
 const bool = (v, d=false) => String(v ?? d).toLowerCase() === 'true'
 const num  = (v, d=0) => (Number(v) || d)
 
-export class InstagramSmart {
+export class InstagramDriver {
   constructor() {
     this.headful = bool(process.env.IG_HEADFUL, false)
     this.slowMo  = num(process.env.IG_SLOW_MO_MS, 0)
