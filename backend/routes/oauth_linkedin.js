@@ -1,6 +1,6 @@
 // backend/routes/oauth_linkedin.js
-// Works with LINKEDIN_* or LI_* env names. Verifies Supabase JWT via JWKS,
-// falls back to /auth/v1/user when JWKS fails. Saves token to app_settings.
+// Fixes “bad_front_token” on Render. Handles Supabase HS256 tokens and JWKS.
+// Falls back to /auth/v1/user with apikey. Saves real LI token to app_settings.
 
 import express from 'express'
 import fetch from 'node-fetch'
@@ -15,8 +15,12 @@ const CLIENT_SECRET = process.env.LINKEDIN_CLIENT_SECRET || process.env.LI_CLIEN
 const REDIRECT      = process.env.LINKEDIN_REDIRECT || process.env.LI_REDIRECT || 'https://empirerise.onrender.com/oauth/linkedin/callback'
 const APP_ORIGIN    = (process.env.APP_ORIGIN || process.env.ORIGIN_APP || 'https://empirerise.netlify.app').replace(/\/+$/,'')
 const STATE_SECRET  = process.env.STATE_SECRET || 'change-me'
-const SUPABASE_URL  = process.env.SUPABASE_URL || ''
-const SUPABASE_JWKS_URL = process.env.SUPABASE_JWKS_URL || (SUPABASE_URL ? `${SUPABASE_URL.replace(/\/+$/,'')}/auth/v1/keys` : '')
+
+// Supabase config
+const SUPABASE_URL        = (process.env.SUPABASE_URL || '').replace(/\/+$/,'')
+const SUPABASE_JWKS_URL   = process.env.SUPABASE_JWKS_URL || (SUPABASE_URL ? `${SUPABASE_URL}/auth/v1/keys` : '')
+const SUPABASE_ANON_KEY   = process.env.SUPABASE_ANON_KEY || ''      // needed for /auth/v1/user
+const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET || ''    // optional, for HS256 verify
 
 // LinkedIn endpoints
 const LI_AUTH     = 'https://www.linkedin.com/oauth/v2/authorization'
@@ -26,29 +30,45 @@ const LI_USERINFO = 'https://api.linkedin.com/v2/userinfo'
 // Keys
 const stateKey = new TextEncoder().encode(STATE_SECRET)
 const supaJWKS = SUPABASE_JWKS_URL ? createRemoteJWKSet(new URL(SUPABASE_JWKS_URL)) : null
+const hsKey    = SUPABASE_JWT_SECRET ? new TextEncoder().encode(SUPABASE_JWT_SECRET) : null
 
 // Helpers
 async function userIdFromSupabaseJWT(token) {
   if (!token) throw new Error('missing_front_token')
 
-  // Try JWKS verify
+  // Try RS256 via JWKS
   if (supaJWKS) {
     try {
       const { payload } = await jwtVerify(token, supaJWKS, { algorithms: ['RS256'] })
       const uid = payload?.sub || payload?.user_id
       if (uid) return uid
     } catch (e) {
-      console.log('li_jwt_verify_failed', String(e?.message || e))
+      console.log('li_jwt_verify_failed_rs256', String(e?.message || e))
     }
-  } else {
-    console.log('li_jwks_not_configured')
   }
 
-  // Fallback to Supabase Auth user endpoint
-  if (!SUPABASE_URL) throw new Error('jwks_and_supabase_unavailable')
+  // Try HS256 with Supabase JWT secret if provided
+  if (hsKey) {
+    try {
+      const { payload } = await jwtVerify(token, hsKey, { algorithms: ['HS256'] })
+      const uid = payload?.sub || payload?.user_id
+      if (uid) return uid
+    } catch (e) {
+      console.log('li_jwt_verify_failed_hs256', String(e?.message || e))
+    }
+  }
+
+  // Fallback: ask Supabase Auth who this token belongs to
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    console.log('li_auth_user_skipped', 'missing_supabase_url_or_apikey')
+    throw new Error('bad_front_token')
+  }
   try {
-    const r = await fetch(`${SUPABASE_URL.replace(/\/+$/,'')}/auth/v1/user`, {
-      headers: { Authorization: `Bearer ${token}` }
+    const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: SUPABASE_ANON_KEY
+      }
     })
     if (!r.ok) throw new Error(`auth_user_http_${r.status}`)
     const u = await r.json().catch(() => ({}))
@@ -150,7 +170,7 @@ router.get('/callback', async (req, res) => {
     const expiresIn = Number(tokenJson?.expires_in || 0)
     if (!accessToken) throw new Error('no_access_token')
 
-    // Optional, bind LinkedIn user id
+    // Optional bind
     let liUserId = ''
     try {
       const ui = await fetch(LI_USERINFO, { headers: { Authorization: `Bearer ${accessToken}` } })
