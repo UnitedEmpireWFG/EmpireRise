@@ -1,6 +1,3 @@
-// backend/routes/oauth_linkedin.js
-// Full route with short-state, clear errors, and real token save.
-
 import express from 'express'
 import fetch from 'node-fetch'
 import { createRemoteJWKSet, jwtVerify, SignJWT } from 'jose'
@@ -8,24 +5,20 @@ import { supaAdmin } from '../db.js'
 
 const router = express.Router()
 
-// Env
 const CLIENT_ID = process.env.LINKEDIN_CLIENT_ID || process.env.LI_CLIENT_ID
 const CLIENT_SECRET = process.env.LINKEDIN_CLIENT_SECRET || process.env.LI_CLIENT_SECRET
 const REDIRECT = process.env.LINKEDIN_REDIRECT || process.env.LI_REDIRECT || 'https://empirerise.onrender.com/oauth/linkedin/callback'
 const APP_ORIGIN = (process.env.APP_ORIGIN || process.env.ORIGIN_APP || 'https://empirerise.netlify.app').replace(/\/+$/,'')
 const SUPABASE_JWKS_URL = process.env.SUPABASE_JWKS_URL
-const STATE_SECRET = process.env.STATE_SECRET || process.env.JWT_SECRET || 'change-me'
+const STATE_SECRET = process.env.STATE_SECRET || 'change-me'
 
-// LinkedIn endpoints
 const LI_AUTH = 'https://www.linkedin.com/oauth/v2/authorization'
 const LI_TOKEN = 'https://www.linkedin.com/oauth/v2/accessToken'
 const LI_USERINFO = 'https://api.linkedin.com/v2/userinfo'
 
-// Keys
 const supaJWKS = SUPABASE_JWKS_URL ? createRemoteJWKSet(new URL(SUPABASE_JWKS_URL)) : null
 const stateKey = new TextEncoder().encode(STATE_SECRET)
 
-// Helpers
 async function userIdFromSupabaseJWT(jwt) {
   if (!jwt) throw new Error('missing_front_token')
   if (!supaJWKS) throw new Error('jwks_not_configured')
@@ -45,7 +38,7 @@ async function userIdFromShortState(shortState) {
   return payload?.sub || null
 }
 
-// Step 1. Start OAuth
+// Start OAuth. Requires ?token= Supabase JWT from the frontend.
 router.get('/login', async (req, res) => {
   try {
     if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT) {
@@ -58,7 +51,6 @@ router.get('/login', async (req, res) => {
       return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=missing_env_${encodeURIComponent(miss)}`)
     }
 
-    // Accept Supabase JWT from ?token= or ?state=
     const frontJWT = String(req.query.token || req.query.state || '')
     if (!frontJWT) {
       console.log('linkedin_login_error', 'no_front_token')
@@ -66,9 +58,8 @@ router.get('/login', async (req, res) => {
     }
 
     let userId
-    try {
-      userId = await userIdFromSupabaseJWT(frontJWT)
-    } catch (e) {
+    try { userId = await userIdFromSupabaseJWT(frontJWT) }
+    catch (e) {
       console.log('linkedin_login_error bad_front_token', e?.message)
       return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=bad_front_token`)
     }
@@ -92,14 +83,13 @@ router.get('/login', async (req, res) => {
   }
 })
 
-// Step 2. Callback
+// Callback. Saves real token to app_settings via supaAdmin.
 router.get('/callback', async (req, res) => {
   const { code = '', state = '' } = req.query || {}
   try {
     const userId = await userIdFromShortState(String(state))
     if (!userId) throw new Error('user_not_identified')
 
-    // Exchange code for token
     const body = new URLSearchParams({
       grant_type: 'authorization_code',
       code: String(code),
@@ -121,13 +111,11 @@ router.get('/callback', async (req, res) => {
     const expiresIn = Number(tokenJson?.expires_in || 0)
     if (!accessToken) throw new Error('no_access_token')
 
-    // Fetch user info
     const ui = await fetch(LI_USERINFO, { headers: { Authorization: `Bearer ${accessToken}` } })
     if (!ui.ok) throw new Error(`userinfo_http_${ui.status}`)
     const userInfo = await ui.json().catch(()=> ({}))
     const liUserId = String(userInfo?.sub || '')
 
-    // Save token
     await supaAdmin.from('app_settings').upsert({
       user_id: userId,
       linkedin_access_token: accessToken,

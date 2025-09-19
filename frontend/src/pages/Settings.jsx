@@ -1,3 +1,4 @@
+// frontend/src/pages/Settings.jsx
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 
@@ -36,6 +37,13 @@ export default function Settings() {
   const [ig, setIg] = useState(false)
   const [msg, setMsg] = useState('')
 
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search)
+    const err = q.get('error')
+    if (err) setMsg('OAuth error ' + err)
+    refresh()
+  }, [])
+
   async function refresh() {
     try {
       const token = await requireToken()
@@ -55,18 +63,19 @@ export default function Settings() {
     }
   }
 
-  useEffect(() => { refresh() }, [])
-
   async function connectLinkedIn() {
     const token = await requireToken()
-    await openPopup(`${API}/oauth/linkedin/login?state=${encodeURIComponent(token)}`)
+    // Use token param to avoid long state. Backend accepts ?token= and mints short state.
+    await openPopup(`${API}/oauth/linkedin/login?token=${encodeURIComponent(token)}`)
     await refresh()
   }
+
   async function connectFacebook() {
     const token = await requireToken()
     await openPopup(`${API}/oauth/meta/login?platform=facebook&state=${encodeURIComponent(token)}`)
     await refresh()
   }
+
   async function connectInstagram() {
     const token = await requireToken()
     await openPopup(`${API}/oauth/meta/login?platform=instagram&state=${encodeURIComponent(token)}`)
