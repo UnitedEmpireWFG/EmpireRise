@@ -1,4 +1,3 @@
-// backend/routes/oauth_meta.js
 import express from 'express'
 import fetch from 'node-fetch'
 import * as jose from 'jose'
@@ -10,14 +9,12 @@ const APP_ORIGIN = (process.env.APP_ORIGIN || process.env.ORIGIN_APP || '').repl
 const META_APP_ID     = process.env.META_APP_ID
 const META_APP_SECRET = process.env.META_APP_SECRET
 const META_REDIRECT   = (process.env.META_REDIRECT || '').replace(/\/+$/, '')
-const META_SCOPES     = (process.env.META_SCOPES || 'public_profile,email')
-  .split(/[ ,]+/).filter(Boolean).join(',')
-const JWKS_URL = process.env.SUPABASE_JWKS_URL || (process.env.SUPABASE_URL
-  ? `${process.env.SUPABASE_URL.replace(/\/+$/,'')}/auth/v1/keys` : null)
+const META_SCOPES     = (process.env.META_SCOPES || 'public_profile,email').split(/[ ,]+/).filter(Boolean).join(',')
+const JWKS_URL = process.env.SUPABASE_JWKS_URL || (process.env.SUPABASE_URL ? `${process.env.SUPABASE_URL.replace(/\/+$/,'')}/auth/v1/keys` : null)
 
 const OAUTH_DIALOG = 'https://www.facebook.com/v20.0/dialog/oauth'
 const TOKEN_URL    = 'https://graph.facebook.com/v20.0/oauth/access_token'
-const PROFILE_URL  = 'https://graph.facebook.com/me?fields=id,name,email'
+const PROFILE_URL  = 'https://graph.facebook.com/v20.0/me?fields=id,name,email'
 
 function must(name, v) { if (!v) throw new Error(`env_missing:${name}`) }
 async function verifySupabaseJWT(token) {
@@ -27,6 +24,7 @@ async function verifySupabaseJWT(token) {
   return payload
 }
 
+// Start OAuth
 router.get('/login', (req, res) => {
   try {
     const { platform = 'facebook', state = '' } = req.query
@@ -46,7 +44,8 @@ router.get('/login', (req, res) => {
   }
 })
 
-// GET /oauth/meta/callback?code=...&state=<platform:jwt>
+// Callback
+// /oauth/meta/callback?code=...&state=<platform:jwt>
 router.get('/callback', async (req, res) => {
   try {
     const code = req.query.code
@@ -64,6 +63,7 @@ router.get('/callback', async (req, res) => {
     const userId = supaPayload.sub || supaPayload.user_id
     if (!userId) throw new Error('no_user_in_token')
 
+    // Exchange code for token
     const turl = new URL(TOKEN_URL)
     turl.searchParams.set('client_id', META_APP_ID)
     turl.searchParams.set('client_secret', META_APP_SECRET)
@@ -73,19 +73,27 @@ router.get('/callback', async (req, res) => {
     const tres = await fetch(turl.toString())
     if (!tres.ok) throw new Error(`token_http_${tres.status}`)
     const tok = await tres.json()
-    if (!tok.access_token) throw new Error('no_access_token')
+    const accessToken = tok?.access_token
+    const expiresIn = Number(tok?.expires_in || 0)
+    if (!accessToken) throw new Error('no_access_token')
 
-    const pres = await fetch(`${PROFILE_URL}&access_token=${encodeURIComponent(tok.access_token)}`)
-    const profile = pres.ok ? await pres.json() : {}
+    // Fetch profile to bind account
+    const pres = await fetch(`${PROFILE_URL}&access_token=${encodeURIComponent(accessToken)}`)
+    if (!pres.ok) throw new Error(`me_http_${pres.status}`)
+    const profile = await pres.json().catch(()=> ({}))
+    const fbUserId = String(profile?.id || '')
 
+    // Save real token
     await supaAdmin.from('app_settings').upsert({
       user_id: userId,
-      meta_access_token: tok.access_token,
+      meta_access_token: accessToken,
+      meta_expires_at: expiresIn ? new Date(Date.now() + expiresIn * 1000).toISOString() : null,
+      meta_user_id: fbUserId || null,
       meta_profile: profile,
       updated_at: new Date().toISOString()
     }, { onConflict: 'user_id' })
 
-    return res.redirect(`${APP_ORIGIN}/settings?connected=meta&ok=true`)
+    return res.redirect(`${APP_ORIGIN}/settings?connected=meta&ok=true&platform=${platform}`)
   } catch (e) {
     return res.redirect(`${APP_ORIGIN}/settings?connected=meta&ok=false&error=${encodeURIComponent(e.message)}`)
   }
