@@ -5,7 +5,7 @@
 import express from 'express'
 import fetch from 'node-fetch'
 import { createRemoteJWKSet, jwtVerify } from 'jose'
-import { supa } from '../db.js'
+import { supaAdmin } from '../db.js'
 
 const router = express.Router()
 
