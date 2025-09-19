@@ -1,3 +1,4 @@
+// backend/routes/oauth_linkedin.js
 import express from 'express'
 import fetch from 'node-fetch'
 import { createRemoteJWKSet, jwtVerify, SignJWT } from 'jose'
@@ -38,7 +39,6 @@ async function userIdFromShortState(shortState) {
   return payload?.sub || null
 }
 
-// Start OAuth. Requires ?token= Supabase JWT from the frontend.
 router.get('/login', async (req, res) => {
   try {
     if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT) {
@@ -83,7 +83,6 @@ router.get('/login', async (req, res) => {
   }
 })
 
-// Callback. Saves real token to app_settings via supaAdmin.
 router.get('/callback', async (req, res) => {
   const { code = '', state = '' } = req.query || {}
   try {

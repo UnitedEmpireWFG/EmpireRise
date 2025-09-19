@@ -65,17 +65,14 @@ export default function Settings() {
 
   async function connectLinkedIn() {
     const token = await requireToken()
-    // Use token param to avoid long state. Backend accepts ?token= and mints short state.
     await openPopup(`${API}/oauth/linkedin/login?token=${encodeURIComponent(token)}`)
     await refresh()
   }
-
   async function connectFacebook() {
     const token = await requireToken()
     await openPopup(`${API}/oauth/meta/login?platform=facebook&state=${encodeURIComponent(token)}`)
     await refresh()
   }
-
   async function connectInstagram() {
     const token = await requireToken()
     await openPopup(`${API}/oauth/meta/login?platform=instagram&state=${encodeURIComponent(token)}`)
