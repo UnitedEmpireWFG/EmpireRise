@@ -1,129 +1,98 @@
 // backend/routes/oauth_linkedin.js
-// Sign in with LinkedIn using OpenID Connect only.
-// Fixes "Bummer" by requesting only OIDC scopes.
-// Verifies Supabase token and falls back to /auth/v1/user.
+// Drop-in, fixes bad_front_token and writes with service role.
+// Works with your existing FRONTEND which sends ?state=<supabase access_token>
+// Uses LINKEDIN_* env names you already have.
 
 import express from 'express'
 import fetch from 'node-fetch'
-import { createRemoteJWKSet, jwtVerify, SignJWT } from 'jose'
+import * as jose from 'jose'
 import { supaAdmin } from '../db.js'
 
 const router = express.Router()
 
 // Env
-const CLIENT_ID     = process.env.LINKEDIN_CLIENT_ID || process.env.LI_CLIENT_ID
-const CLIENT_SECRET = process.env.LINKEDIN_CLIENT_SECRET || process.env.LI_CLIENT_SECRET
-const REDIRECT      = process.env.LINKEDIN_REDIRECT || process.env.LI_REDIRECT || 'https://empirerise.onrender.com/oauth/linkedin/callback'
-const APP_ORIGIN    = (process.env.APP_ORIGIN || process.env.ORIGIN_APP || 'https://empirerise.netlify.app').replace(/\/+$/,'')
-const STATE_SECRET  = process.env.STATE_SECRET || 'change-me'
-
-// Supabase
-const SUPABASE_URL        = (process.env.SUPABASE_URL || '').replace(/\/+$/,'')
-const SUPABASE_JWKS_URL   = process.env.SUPABASE_JWKS_URL || (SUPABASE_URL ? `${SUPABASE_URL}/auth/v1/keys` : '')
-const SUPABASE_ANON_KEY   = process.env.SUPABASE_ANON_KEY || ''
-const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET || ''
+const APP_ORIGIN = (process.env.APP_ORIGIN || process.env.ORIGIN_APP || '').replace(/\/+$/,'')
+const CLIENT_ID = process.env.LINKEDIN_CLIENT_ID || process.env.LI_CLIENT_ID || ''
+const CLIENT_SECRET = process.env.LINKEDIN_CLIENT_SECRET || process.env.LI_CLIENT_SECRET || ''
+const REDIRECT = (
+  process.env.LINKEDIN_REDIRECT ||
+  process.env.LI_REDIRECT ||
+  `${process.env.API_BASE || 'https://empirerise.onrender.com'}/oauth/linkedin/callback`
+).replace(/\/+$/,'')
+const SUPABASE_JWKS_URL = process.env.SUPABASE_JWKS_URL || (process.env.SUPABASE_URL ? `${process.env.SUPABASE_URL.replace(/\/+$/,'')}/auth/v1/keys` : '')
+const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET || '' // only for projects still using HS256
+const STATE_SECRET = process.env.STATE_SECRET || '' // optional hardening, not required
 
 // LinkedIn endpoints
-const LI_AUTH     = 'https://www.linkedin.com/oauth/v2/authorization'
-const LI_TOKEN    = 'https://www.linkedin.com/oauth/v2/accessToken'
-const LI_USERINFO = 'https://api.linkedin.com/v2/userinfo'
+const LI_AUTH = 'https://www.linkedin.com/oauth/v2/authorization'
+const LI_TOKEN = 'https://www.linkedin.com/oauth/v2/accessToken'
+const LI_USERINFO = 'https://api.linkedin.com/v2/userinfo' // requires openid profile email scopes
 
-// Keys
-const stateKey = new TextEncoder().encode(STATE_SECRET)
-const supaJWKS = SUPABASE_JWKS_URL ? createRemoteJWKSet(new URL(SUPABASE_JWKS_URL)) : null
-const hsKey    = SUPABASE_JWT_SECRET ? new TextEncoder().encode(SUPABASE_JWT_SECRET) : null
+function must(name, v) { if (!v) throw new Error(`env_missing:${name}`) }
 
-// Helpers
-async function userIdFromSupabaseJWT(token) {
-  if (!token) throw new Error('missing_front_token')
+// Verify the Supabase front-end JWT we receive in the state parameter.
+// Supports RS256 via JWKS and HS256 via SUPABASE_JWT_SECRET.
+async function getUserIdFromFrontJWT(jwt) {
+  if (!jwt) throw new Error('missing_front_token')
 
-  if (supaJWKS) {
+  // Try RS256 first
+  if (SUPABASE_JWKS_URL) {
     try {
-      const { payload } = await jwtVerify(token, supaJWKS, { algorithms: ['RS256'] })
-      const uid = payload?.sub || payload?.user_id
-      if (uid) return uid
+      const JWKS = jose.createRemoteJWKSet(new URL(SUPABASE_JWKS_URL))
+      const { payload, protectedHeader } = await jose.jwtVerify(jwt, JWKS, { algorithms: ['RS256'] })
+      if (!payload?.sub) throw new Error('no_sub')
+      return String(payload.sub)
     } catch (e) {
-      console.log('li_jwt_verify_failed_rs256', String(e?.message || e))
-    }
-  }
-  if (hsKey) {
-    try {
-      const { payload } = await jwtVerify(token, hsKey, { algorithms: ['HS256'] })
-      const uid = payload?.sub || payload?.user_id
-      if (uid) return uid
-    } catch (e) {
-      console.log('li_jwt_verify_failed_hs256', String(e?.message || e))
+      // fall through to HS256 path
     }
   }
 
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) throw new Error('bad_front_token')
-  try {
-    const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-      headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_ANON_KEY }
-    })
-    if (!r.ok) throw new Error(`auth_user_http_${r.status}`)
-    const u = await r.json().catch(() => ({}))
-    const uid = u?.id || u?.user?.id
-    if (!uid) throw new Error('auth_user_no_id')
-    return uid
-  } catch (e) {
-    console.log('li_auth_user_failed', String(e?.message || e))
-    throw new Error('bad_front_token')
+  // HS256 fallback for older Supabase projects
+  if (SUPABASE_JWT_SECRET) {
+    const key = new TextEncoder().encode(SUPABASE_JWT_SECRET)
+    const { payload } = await jose.jwtVerify(jwt, key, { algorithms: ['HS256'] })
+    if (!payload?.sub) throw new Error('no_sub')
+    return String(payload.sub)
   }
+
+  throw new Error('jwt_verify_unavailable')
 }
 
-async function makeShortState(userId) {
-  return await new SignJWT({ sub: userId, purpose: 'li_oauth' })
-    .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
-    .setIssuedAt()
-    .setExpirationTime('10m')
-    .sign(stateKey)
-}
-async function userIdFromShortState(shortState) {
-  const { payload } = await jwtVerify(shortState, stateKey, { algorithms: ['HS256'] })
-  if (payload?.purpose !== 'li_oauth') throw new Error('bad_state_purpose')
-  return payload?.sub || null
-}
-
-// Step 1: start OAuth. Frontend sends ?token= Supabase access token.
+// Step 1: start OAuth
+// GET /oauth/linkedin/login?state=<supabase_access_token>
+// Legacy support: also accepts ?token=
 router.get('/login', async (req, res) => {
   try {
-    if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT) {
-      const miss = [
-        !CLIENT_ID ? 'LINKEDIN_CLIENT_ID' : null,
-        !CLIENT_SECRET ? 'LINKEDIN_CLIENT_SECRET' : null,
-        !REDIRECT ? 'LINKEDIN_REDIRECT' : null
-      ].filter(Boolean).join(',')
-      console.log('linkedin_login_error missing_env', miss)
-      return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=missing_env_${encodeURIComponent(miss)}`)
+    must('LINKEDIN_CLIENT_ID', CLIENT_ID)
+    must('LINKEDIN_CLIENT_SECRET', CLIENT_SECRET)
+    must('LINKEDIN_REDIRECT', REDIRECT)
+    must('APP_ORIGIN', APP_ORIGIN)
+
+    const stateJwt = String(req.query.state || req.query.token || '')
+    if (!stateJwt) {
+      console.log('linkedin_login_error missing_state_jwt')
+      return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=missing_state`)
     }
 
-    const frontJWT = String(req.query.token || req.query.state || '')
-    if (!frontJWT) {
-      console.log('linkedin_login_error', 'no_front_token')
-      return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=no_front_token`)
+    // Optional integrity wrapper around the frontend token
+    let state = stateJwt
+    if (STATE_SECRET) {
+      const now = Math.floor(Date.now() / 1000)
+      state = await new jose.SignJWT({ t: 'li_oauth', s: stateJwt })
+        .setProtectedHeader({ alg: 'HS256' })
+        .setIssuedAt(now)
+        .setExpirationTime(now + 600)
+        .sign(new TextEncoder().encode(STATE_SECRET))
     }
-
-    let userId
-    try { userId = await userIdFromSupabaseJWT(frontJWT) }
-    catch (e) {
-      console.log('linkedin_login_error bad_front_token', e?.message)
-      return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=bad_front_token`)
-    }
-    if (!userId) {
-      console.log('linkedin_login_error', 'user_not_identified')
-      return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=user_not_identified`)
-    }
-
-    const shortState = await makeShortState(userId)
 
     const url = new URL(LI_AUTH)
     url.searchParams.set('response_type', 'code')
     url.searchParams.set('client_id', CLIENT_ID)
     url.searchParams.set('redirect_uri', REDIRECT)
-    // OIDC only
-    url.searchParams.set('scope', 'openid profile email')
-    url.searchParams.set('state', shortState)
+    // keep both classic and OIDC scopes so /userinfo works and posting remains allowed
+    url.searchParams.set('scope', 'openid profile email r_liteprofile r_emailaddress w_member_social')
+    url.searchParams.set('state', state)
+
     return res.redirect(url.toString())
   } catch (e) {
     console.log('linkedin_login_error', e?.message)
@@ -131,53 +100,69 @@ router.get('/login', async (req, res) => {
   }
 })
 
-// Step 2: callback, exchange code for token, save to app_settings.
+// Step 2: OAuth callback
 router.get('/callback', async (req, res) => {
-  const { code = '', state = '' } = req.query || {}
   try {
-    console.log('li_cb_url', req.originalUrl)
-    const userId = await userIdFromShortState(String(state))
+    const code = String(req.query.code || '')
+    let state = String(req.query.state || '')
+    if (!code) throw new Error('missing_code')
+
+    // unwrap optional STATE_SECRET
+    if (STATE_SECRET && state && state.split('.').length === 3) {
+      try {
+        const { payload } = await jose.jwtVerify(state, new TextEncoder().encode(STATE_SECRET), { algorithms: ['HS256'] })
+        if (payload?.s) state = String(payload.s)
+      } catch (e) {
+        console.log('li_state_unwrap_failed', e?.message)
+        // continue, will try to use state as-is
+      }
+    }
+
+    // identify the EmpireRise user from the Supabase front token
+    const userId = await getUserIdFromFrontJWT(state)
     if (!userId) throw new Error('user_not_identified')
 
+    // exchange code for access token
     const body = new URLSearchParams({
       grant_type: 'authorization_code',
-      code: String(code),
+      code,
       redirect_uri: REDIRECT,
       client_id: CLIENT_ID,
       client_secret: CLIENT_SECRET
     })
-
     const tr = await fetch(LI_TOKEN, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body
     })
     if (!tr.ok) {
-      const text = await tr.text().catch(() => '')
-      throw new Error(`token_http_${tr.status}:${text.slice(0,200)}`)
+      const t = await tr.text().catch(() => '')
+      throw new Error(`token_http_${tr.status}:${t.slice(0,200)}`)
     }
     const tokenJson = await tr.json()
     const accessToken = tokenJson?.access_token
     const expiresIn = Number(tokenJson?.expires_in || 0)
     if (!accessToken) throw new Error('no_access_token')
 
-    // Optional bind
-    let liUserId = ''
+    // fetch userinfo to bind LinkedIn user id
+    let liUserId = null
     try {
       const ui = await fetch(LI_USERINFO, { headers: { Authorization: `Bearer ${accessToken}` } })
       if (ui.ok) {
-        const userInfo = await ui.json().catch(() => ({}))
-        liUserId = String(userInfo?.sub || '')
+        const j = await ui.json()
+        liUserId = j?.sub ? String(j.sub) : null
       }
     } catch {}
 
-    const { error: upErr } = await supaAdmin.from('app_settings').upsert({
-      user_id: userId,
-      linkedin_access_token: accessToken,
-      linkedin_expires_at: expiresIn ? new Date(Date.now() + expiresIn * 1000).toISOString() : null,
-      linkedin_user_id: liUserId || null,
-      updated_at: new Date().toISOString()
-    }, { onConflict: 'user_id' })
+    // save to app_settings using service role
+    const { error: upErr } = await supaAdmin
+      .from('app_settings')
+      .upsert({
+        user_id: userId,
+        linkedin_access_token: accessToken,
+        linkedin_expires_at: expiresIn ? new Date(Date.now() + expiresIn * 1000).toISOString() : null,
+        linkedin_user_id: liUserId
+      }, { onConflict: 'user_id' })
     if (upErr) throw upErr
 
     console.log('linkedin_callback_ok', userId)
