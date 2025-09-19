@@ -1,3 +1,6 @@
+// backend/routes/oauth_linkedin.js
+// Full route with short-state, clear errors, and real token save.
+
 import express from 'express'
 import fetch from 'node-fetch'
 import { createRemoteJWKSet, jwtVerify, SignJWT } from 'jose'
@@ -19,18 +22,17 @@ const LI_TOKEN = 'https://www.linkedin.com/oauth/v2/accessToken'
 const LI_USERINFO = 'https://api.linkedin.com/v2/userinfo'
 
 // Keys
-const jwks = SUPABASE_JWKS_URL ? createRemoteJWKSet(new URL(SUPABASE_JWKS_URL)) : null
+const supaJWKS = SUPABASE_JWKS_URL ? createRemoteJWKSet(new URL(SUPABASE_JWKS_URL)) : null
 const stateKey = new TextEncoder().encode(STATE_SECRET)
 
 // Helpers
 async function userIdFromSupabaseJWT(jwt) {
-  if (!jwt) throw new Error('missing_front_state')
-  if (!jwks) throw new Error('jwks_not_configured')
-  const { payload } = await jwtVerify(jwt, jwks, { algorithms: ['RS256'] })
+  if (!jwt) throw new Error('missing_front_token')
+  if (!supaJWKS) throw new Error('jwks_not_configured')
+  const { payload } = await jwtVerify(jwt, supaJWKS, { algorithms: ['RS256'] })
   return payload?.sub || payload?.user_id || null
 }
 async function makeShortState(userId) {
-  // short HS256 JWT, expires in 10 minutes
   return await new SignJWT({ sub: userId, purpose: 'li_oauth' })
     .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
     .setIssuedAt()
@@ -43,7 +45,7 @@ async function userIdFromShortState(shortState) {
   return payload?.sub || null
 }
 
-// STEP 1: start OAuth with short state
+// Step 1. Start OAuth
 router.get('/login', async (req, res) => {
   try {
     if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT) {
@@ -56,12 +58,25 @@ router.get('/login', async (req, res) => {
       return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=missing_env_${encodeURIComponent(miss)}`)
     }
 
-    // Frontend passes Supabase JWT in ?state=...
-    const frontState = String(req.query.state || '')
-    const userId = await userIdFromSupabaseJWT(frontState)
-    if (!userId) throw new Error('user_not_identified')
+    // Accept Supabase JWT from ?token= or ?state=
+    const frontJWT = String(req.query.token || req.query.state || '')
+    if (!frontJWT) {
+      console.log('linkedin_login_error', 'no_front_token')
+      return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=no_front_token`)
+    }
 
-    // Create compact state for LinkedIn (<< 255 chars)
+    let userId
+    try {
+      userId = await userIdFromSupabaseJWT(frontJWT)
+    } catch (e) {
+      console.log('linkedin_login_error bad_front_token', e?.message)
+      return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=bad_front_token`)
+    }
+    if (!userId) {
+      console.log('linkedin_login_error', 'user_not_identified')
+      return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=user_not_identified`)
+    }
+
     const shortState = await makeShortState(userId)
 
     const url = new URL(LI_AUTH)
@@ -77,14 +92,14 @@ router.get('/login', async (req, res) => {
   }
 })
 
-// STEP 2: callback exchanges code and saves real token
+// Step 2. Callback
 router.get('/callback', async (req, res) => {
   const { code = '', state = '' } = req.query || {}
   try {
     const userId = await userIdFromShortState(String(state))
     if (!userId) throw new Error('user_not_identified')
 
-    // Exchange code→token
+    // Exchange code for token
     const body = new URLSearchParams({
       grant_type: 'authorization_code',
       code: String(code),
@@ -92,7 +107,11 @@ router.get('/callback', async (req, res) => {
       client_id: CLIENT_ID,
       client_secret: CLIENT_SECRET
     })
-    const tr = await fetch(LI_TOKEN, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body })
+    const tr = await fetch(LI_TOKEN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body
+    })
     if (!tr.ok) {
       const text = await tr.text().catch(()=> '')
       throw new Error(`token_http_${tr.status}:${text.slice(0,200)}`)
@@ -102,13 +121,13 @@ router.get('/callback', async (req, res) => {
     const expiresIn = Number(tokenJson?.expires_in || 0)
     if (!accessToken) throw new Error('no_access_token')
 
-    // Fetch user info to bind account
+    // Fetch user info
     const ui = await fetch(LI_USERINFO, { headers: { Authorization: `Bearer ${accessToken}` } })
     if (!ui.ok) throw new Error(`userinfo_http_${ui.status}`)
     const userInfo = await ui.json().catch(()=> ({}))
     const liUserId = String(userInfo?.sub || '')
 
-    // Save token for this user
+    // Save token
     await supaAdmin.from('app_settings').upsert({
       user_id: userId,
       linkedin_access_token: accessToken,
