@@ -1,4 +1,7 @@
 // backend/routes/oauth_linkedin.js
+// Works with LINKEDIN_* or LI_* env names. Verifies Supabase JWT via JWKS,
+// falls back to /auth/v1/user when JWKS fails. Saves token to app_settings.
+
 import express from 'express'
 import fetch from 'node-fetch'
 import { createRemoteJWKSet, jwtVerify, SignJWT } from 'jose'
@@ -6,26 +9,58 @@ import { supaAdmin } from '../db.js'
 
 const router = express.Router()
 
-const CLIENT_ID = process.env.LINKEDIN_CLIENT_ID || process.env.LI_CLIENT_ID
+// Env
+const CLIENT_ID     = process.env.LINKEDIN_CLIENT_ID || process.env.LI_CLIENT_ID
 const CLIENT_SECRET = process.env.LINKEDIN_CLIENT_SECRET || process.env.LI_CLIENT_SECRET
-const REDIRECT = process.env.LINKEDIN_REDIRECT || process.env.LI_REDIRECT || 'https://empirerise.onrender.com/oauth/linkedin/callback'
-const APP_ORIGIN = (process.env.APP_ORIGIN || process.env.ORIGIN_APP || 'https://empirerise.netlify.app').replace(/\/+$/,'')
-const SUPABASE_JWKS_URL = process.env.SUPABASE_JWKS_URL
-const STATE_SECRET = process.env.STATE_SECRET || 'change-me'
+const REDIRECT      = process.env.LINKEDIN_REDIRECT || process.env.LI_REDIRECT || 'https://empirerise.onrender.com/oauth/linkedin/callback'
+const APP_ORIGIN    = (process.env.APP_ORIGIN || process.env.ORIGIN_APP || 'https://empirerise.netlify.app').replace(/\/+$/,'')
+const STATE_SECRET  = process.env.STATE_SECRET || 'change-me'
+const SUPABASE_URL  = process.env.SUPABASE_URL || ''
+const SUPABASE_JWKS_URL = process.env.SUPABASE_JWKS_URL || (SUPABASE_URL ? `${SUPABASE_URL.replace(/\/+$/,'')}/auth/v1/keys` : '')
 
-const LI_AUTH = 'https://www.linkedin.com/oauth/v2/authorization'
-const LI_TOKEN = 'https://www.linkedin.com/oauth/v2/accessToken'
+// LinkedIn endpoints
+const LI_AUTH     = 'https://www.linkedin.com/oauth/v2/authorization'
+const LI_TOKEN    = 'https://www.linkedin.com/oauth/v2/accessToken'
 const LI_USERINFO = 'https://api.linkedin.com/v2/userinfo'
 
-const supaJWKS = SUPABASE_JWKS_URL ? createRemoteJWKSet(new URL(SUPABASE_JWKS_URL)) : null
+// Keys
 const stateKey = new TextEncoder().encode(STATE_SECRET)
+const supaJWKS = SUPABASE_JWKS_URL ? createRemoteJWKSet(new URL(SUPABASE_JWKS_URL)) : null
 
-async function userIdFromSupabaseJWT(jwt) {
-  if (!jwt) throw new Error('missing_front_token')
-  if (!supaJWKS) throw new Error('jwks_not_configured')
-  const { payload } = await jwtVerify(jwt, supaJWKS, { algorithms: ['RS256'] })
-  return payload?.sub || payload?.user_id || null
+// Helpers
+async function userIdFromSupabaseJWT(token) {
+  if (!token) throw new Error('missing_front_token')
+
+  // Try JWKS verify
+  if (supaJWKS) {
+    try {
+      const { payload } = await jwtVerify(token, supaJWKS, { algorithms: ['RS256'] })
+      const uid = payload?.sub || payload?.user_id
+      if (uid) return uid
+    } catch (e) {
+      console.log('li_jwt_verify_failed', String(e?.message || e))
+    }
+  } else {
+    console.log('li_jwks_not_configured')
+  }
+
+  // Fallback to Supabase Auth user endpoint
+  if (!SUPABASE_URL) throw new Error('jwks_and_supabase_unavailable')
+  try {
+    const r = await fetch(`${SUPABASE_URL.replace(/\/+$/,'')}/auth/v1/user`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    if (!r.ok) throw new Error(`auth_user_http_${r.status}`)
+    const u = await r.json().catch(() => ({}))
+    const uid = u?.id || u?.user?.id
+    if (!uid) throw new Error('auth_user_no_id')
+    return uid
+  } catch (e) {
+    console.log('li_auth_user_failed', String(e?.message || e))
+    throw new Error('bad_front_token')
+  }
 }
+
 async function makeShortState(userId) {
   return await new SignJWT({ sub: userId, purpose: 'li_oauth' })
     .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
@@ -33,12 +68,14 @@ async function makeShortState(userId) {
     .setExpirationTime('10m')
     .sign(stateKey)
 }
+
 async function userIdFromShortState(shortState) {
   const { payload } = await jwtVerify(shortState, stateKey, { algorithms: ['HS256'] })
   if (payload?.purpose !== 'li_oauth') throw new Error('bad_state_purpose')
   return payload?.sub || null
 }
 
+// Start OAuth. Frontend must send ?token= Supabase access token.
 router.get('/login', async (req, res) => {
   try {
     if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT) {
@@ -58,8 +95,9 @@ router.get('/login', async (req, res) => {
     }
 
     let userId
-    try { userId = await userIdFromSupabaseJWT(frontJWT) }
-    catch (e) {
+    try {
+      userId = await userIdFromSupabaseJWT(frontJWT)
+    } catch (e) {
       console.log('linkedin_login_error bad_front_token', e?.message)
       return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=bad_front_token`)
     }
@@ -83,6 +121,7 @@ router.get('/login', async (req, res) => {
   }
 })
 
+// Callback. Exchanges code for token and saves to app_settings.
 router.get('/callback', async (req, res) => {
   const { code = '', state = '' } = req.query || {}
   try {
@@ -96,13 +135,14 @@ router.get('/callback', async (req, res) => {
       client_id: CLIENT_ID,
       client_secret: CLIENT_SECRET
     })
+
     const tr = await fetch(LI_TOKEN, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body
     })
     if (!tr.ok) {
-      const text = await tr.text().catch(()=> '')
+      const text = await tr.text().catch(() => '')
       throw new Error(`token_http_${tr.status}:${text.slice(0,200)}`)
     }
     const tokenJson = await tr.json()
@@ -110,18 +150,24 @@ router.get('/callback', async (req, res) => {
     const expiresIn = Number(tokenJson?.expires_in || 0)
     if (!accessToken) throw new Error('no_access_token')
 
-    const ui = await fetch(LI_USERINFO, { headers: { Authorization: `Bearer ${accessToken}` } })
-    if (!ui.ok) throw new Error(`userinfo_http_${ui.status}`)
-    const userInfo = await ui.json().catch(()=> ({}))
-    const liUserId = String(userInfo?.sub || '')
+    // Optional, bind LinkedIn user id
+    let liUserId = ''
+    try {
+      const ui = await fetch(LI_USERINFO, { headers: { Authorization: `Bearer ${accessToken}` } })
+      if (ui.ok) {
+        const userInfo = await ui.json().catch(() => ({}))
+        liUserId = String(userInfo?.sub || '')
+      }
+    } catch {}
 
-    await supaAdmin.from('app_settings').upsert({
+    const { error: upErr } = await supaAdmin.from('app_settings').upsert({
       user_id: userId,
       linkedin_access_token: accessToken,
       linkedin_expires_at: expiresIn ? new Date(Date.now() + expiresIn * 1000).toISOString() : null,
       linkedin_user_id: liUserId || null,
       updated_at: new Date().toISOString()
     }, { onConflict: 'user_id' })
+    if (upErr) throw upErr
 
     console.log('linkedin_callback_ok', userId)
     return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=true`)
