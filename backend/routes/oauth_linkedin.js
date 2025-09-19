@@ -1,6 +1,7 @@
 // backend/routes/oauth_linkedin.js
-// Fixes “bad_front_token” on Render. Handles Supabase HS256 tokens and JWKS.
-// Falls back to /auth/v1/user with apikey. Saves real LI token to app_settings.
+// Sign in with LinkedIn using OpenID Connect only.
+// Fixes "Bummer" by requesting only OIDC scopes.
+// Verifies Supabase token and falls back to /auth/v1/user.
 
 import express from 'express'
 import fetch from 'node-fetch'
@@ -16,11 +17,11 @@ const REDIRECT      = process.env.LINKEDIN_REDIRECT || process.env.LI_REDIRECT |
 const APP_ORIGIN    = (process.env.APP_ORIGIN || process.env.ORIGIN_APP || 'https://empirerise.netlify.app').replace(/\/+$/,'')
 const STATE_SECRET  = process.env.STATE_SECRET || 'change-me'
 
-// Supabase config
+// Supabase
 const SUPABASE_URL        = (process.env.SUPABASE_URL || '').replace(/\/+$/,'')
 const SUPABASE_JWKS_URL   = process.env.SUPABASE_JWKS_URL || (SUPABASE_URL ? `${SUPABASE_URL}/auth/v1/keys` : '')
-const SUPABASE_ANON_KEY   = process.env.SUPABASE_ANON_KEY || ''      // needed for /auth/v1/user
-const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET || ''    // optional, for HS256 verify
+const SUPABASE_ANON_KEY   = process.env.SUPABASE_ANON_KEY || ''
+const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET || ''
 
 // LinkedIn endpoints
 const LI_AUTH     = 'https://www.linkedin.com/oauth/v2/authorization'
@@ -36,7 +37,6 @@ const hsKey    = SUPABASE_JWT_SECRET ? new TextEncoder().encode(SUPABASE_JWT_SEC
 async function userIdFromSupabaseJWT(token) {
   if (!token) throw new Error('missing_front_token')
 
-  // Try RS256 via JWKS
   if (supaJWKS) {
     try {
       const { payload } = await jwtVerify(token, supaJWKS, { algorithms: ['RS256'] })
@@ -46,8 +46,6 @@ async function userIdFromSupabaseJWT(token) {
       console.log('li_jwt_verify_failed_rs256', String(e?.message || e))
     }
   }
-
-  // Try HS256 with Supabase JWT secret if provided
   if (hsKey) {
     try {
       const { payload } = await jwtVerify(token, hsKey, { algorithms: ['HS256'] })
@@ -58,17 +56,10 @@ async function userIdFromSupabaseJWT(token) {
     }
   }
 
-  // Fallback: ask Supabase Auth who this token belongs to
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-    console.log('li_auth_user_skipped', 'missing_supabase_url_or_apikey')
-    throw new Error('bad_front_token')
-  }
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) throw new Error('bad_front_token')
   try {
     const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        apikey: SUPABASE_ANON_KEY
-      }
+      headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_ANON_KEY }
     })
     if (!r.ok) throw new Error(`auth_user_http_${r.status}`)
     const u = await r.json().catch(() => ({}))
@@ -88,14 +79,13 @@ async function makeShortState(userId) {
     .setExpirationTime('10m')
     .sign(stateKey)
 }
-
 async function userIdFromShortState(shortState) {
   const { payload } = await jwtVerify(shortState, stateKey, { algorithms: ['HS256'] })
   if (payload?.purpose !== 'li_oauth') throw new Error('bad_state_purpose')
   return payload?.sub || null
 }
 
-// Start OAuth. Frontend must send ?token= Supabase access token.
+// Step 1: start OAuth. Frontend sends ?token= Supabase access token.
 router.get('/login', async (req, res) => {
   try {
     if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT) {
@@ -115,9 +105,8 @@ router.get('/login', async (req, res) => {
     }
 
     let userId
-    try {
-      userId = await userIdFromSupabaseJWT(frontJWT)
-    } catch (e) {
+    try { userId = await userIdFromSupabaseJWT(frontJWT) }
+    catch (e) {
       console.log('linkedin_login_error bad_front_token', e?.message)
       return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=bad_front_token`)
     }
@@ -132,7 +121,8 @@ router.get('/login', async (req, res) => {
     url.searchParams.set('response_type', 'code')
     url.searchParams.set('client_id', CLIENT_ID)
     url.searchParams.set('redirect_uri', REDIRECT)
-    url.searchParams.set('scope', 'openid profile email r_liteprofile r_emailaddress w_member_social')
+    // OIDC only
+    url.searchParams.set('scope', 'openid profile email')
     url.searchParams.set('state', shortState)
     return res.redirect(url.toString())
   } catch (e) {
@@ -141,10 +131,11 @@ router.get('/login', async (req, res) => {
   }
 })
 
-// Callback. Exchanges code for token and saves to app_settings.
+// Step 2: callback, exchange code for token, save to app_settings.
 router.get('/callback', async (req, res) => {
   const { code = '', state = '' } = req.query || {}
   try {
+    console.log('li_cb_url', req.originalUrl)
     const userId = await userIdFromShortState(String(state))
     if (!userId) throw new Error('user_not_identified')
 
