@@ -1,4 +1,3 @@
-// frontend/src/pages/Settings.jsx
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 
@@ -37,19 +36,14 @@ export default function Settings() {
   const [ig, setIg] = useState(false)
   const [msg, setMsg] = useState('')
 
-  useEffect(() => {
-    const q = new URLSearchParams(window.location.search)
-    const err = q.get('error')
-    if (err) setMsg('OAuth error ' + err)
-    refresh()
-  }, [])
-
   async function refresh() {
     try {
       const token = await requireToken()
-      const r = await fetch(`${API}/api/social/status`, {
+      const ts = Date.now()
+      const r = await fetch(`${API}/api/social/status?ts=${ts}`, {
         headers: { Authorization: `Bearer ${token}` },
-        credentials: 'include'
+        credentials: 'include',
+        cache: 'no-store'
       })
       if (!r.ok) throw new Error(`status_${r.status}`)
       const j = await r.json()
@@ -58,25 +52,35 @@ export default function Settings() {
       setFb(Boolean(j?.facebook))
       setIg(Boolean(j?.instagram))
       setMsg('')
+      if (j?.dbg) console.log('social_status_dbg', j.dbg)
     } catch (e) {
       setMsg(`Status check failed ${String(e?.message || e)}`)
     }
   }
 
+  useEffect(() => { refresh() }, [])
+
+  async function afterPopupRefresh() {
+    await new Promise(r => setTimeout(r, 400))
+    await refresh()
+    await new Promise(r => setTimeout(r, 400))
+    await refresh()
+  }
+
   async function connectLinkedIn() {
     const token = await requireToken()
-    await openPopup(`${API}/oauth/linkedin/login?token=${encodeURIComponent(token)}`)
-    await refresh()
+    await openPopup(`${API}/oauth/linkedin/login?state=${encodeURIComponent(token)}`)
+    await afterPopupRefresh()
   }
   async function connectFacebook() {
     const token = await requireToken()
     await openPopup(`${API}/oauth/meta/login?platform=facebook&state=${encodeURIComponent(token)}`)
-    await refresh()
+    await afterPopupRefresh()
   }
   async function connectInstagram() {
     const token = await requireToken()
     await openPopup(`${API}/oauth/meta/login?platform=instagram&state=${encodeURIComponent(token)}`)
-    await refresh()
+    await afterPopupRefresh()
   }
 
   return (
