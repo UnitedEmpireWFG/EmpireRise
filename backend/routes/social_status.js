@@ -1,3 +1,4 @@
+// backend/routes/social_status.js
 import express from 'express'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -7,6 +8,7 @@ const router = express.Router()
 const COOKIES_DIR = process.env.LI_COOKIES_DIR || '/opt/render/project/.data/li_cookies'
 async function exists(p) { try { await fs.access(p); return true } catch { return false } }
 
+// helpers
 async function getAppSettings(userId) {
   const { data, error } = await supa
     .from('app_settings')
@@ -30,6 +32,7 @@ async function getAuthIdentities(userId) {
   } catch { return [] }
 }
 
+// main
 router.get('/status', async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
@@ -48,18 +51,18 @@ router.get('/status', async (req, res) => {
     const liCookiesPath = path.join(COOKIES_DIR, `${userId}.json`)
     const liCookies = await exists(liCookiesPath)
 
-    const liFromSettings = Boolean(s?.linkedin_access_token)
+    const liFromSettings = !!s?.linkedin_access_token
     const liFromConns = conns.some(x => String(x.provider).toLowerCase().includes('linkedin'))
     const liFromAccts = accts.some(x => String(x.provider).toLowerCase().includes('linkedin'))
-    const liFromIds = ids.some(x => String(x.provider).toLowerCase().includes('linkedin'))
+    const liFromIds   = ids.some(x => String(x.provider).toLowerCase().includes('linkedin'))
     const linkedInConnected = liFromSettings || liFromConns || liFromAccts || liFromIds
 
-    const fbFromSettings = Boolean(s?.meta_access_token)
+    const fbFromSettings = !!s?.meta_access_token
     const fbFromConns = conns.some(x => String(x.provider).toLowerCase() === 'facebook')
     const fbFromAccts = accts.some(x => String(x.provider).toLowerCase() === 'facebook')
     const fbConnected = fbFromSettings || fbFromConns || fbFromAccts
 
-    const igFromSettings = Boolean(s?.instagram_access_token)
+    const igFromSettings = !!s?.instagram_access_token
     const igFromConns = conns.some(x => String(x.provider).toLowerCase().includes('instagram'))
     const igFromAccts = accts.some(x => String(x.provider).toLowerCase().includes('instagram'))
     const igConnected = igFromSettings || igFromConns || igFromAccts
