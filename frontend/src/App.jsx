@@ -7,7 +7,7 @@ import Dashboard from './pages/Dashboard'
 import Approvals from './pages/Approvals'
 import Queue from './pages/Queue'
 import Leads from './pages/Leads'
-import Settings from './pages/Settings.jsx'
+import Settings from './pages/Settings'
 import Login from './pages/Login'   // your existing Login.jsx
 
 export default function App() {
