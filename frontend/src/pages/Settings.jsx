@@ -72,24 +72,14 @@ export default function Settings() {
     await openPopup(`${API}/oauth/linkedin/login?state=${encodeURIComponent(token)}`)
     await afterPopupRefresh()
   }
-  async function connectFacebook() {
-    const token = await requireToken()
-    await openPopup(`${API}/oauth/meta/login?platform=facebook&state=${encodeURIComponent(token)}`)
-    await afterPopupRefresh()
-  }
-  async function connectInstagram() {
-    const token = await requireToken()
-    await openPopup(`${API}/oauth/meta/login?platform=instagram&state=${encodeURIComponent(token)}`)
-    await afterPopupRefresh()
-  }
 
   return (
     <div style={{ padding: 24 }}>
       <h2>Social Connections</h2>
       <p>LinkedIn: {li ? 'Connected' : 'Not connected'} <button onClick={connectLinkedIn}>CONNECT</button></p>
       <p>LinkedIn messaging cookies: {liCookies ? 'Present' : 'Missing'}</p>
-      <p>Facebook: {fb ? 'Connected' : 'Not connected'} <button onClick={connectFacebook}>CONNECT</button></p>
-      <p>Instagram: {ig ? 'Connected' : 'Not connected'} <button onClick={connectInstagram}>CONNECT</button></p>
+      <p>Facebook: {fb ? 'Connected' : 'Not connected'}</p>
+      <p>Instagram: {ig ? 'Connected' : 'Not connected'}</p>
       {msg && <p style={{ marginTop: 8 }}>{msg}</p>}
     </div>
   )
