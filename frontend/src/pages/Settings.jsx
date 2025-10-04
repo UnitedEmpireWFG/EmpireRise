@@ -1,4 +1,3 @@
-// frontend/src/pages/Settings.jsx
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 
@@ -15,7 +14,11 @@ function openPopup(url) {
   const x = window.top.outerWidth / 2 + window.top.screenX - w / 2
   const win = window.open(url, 'oauth_popup', `width=${w},height=${h},left=${x},top=${y}`)
   return new Promise(resolve => {
-    const t = setInterval(() => { if (!win || win.closed) { clearInterval(t); resolve() } }, 700)
+    const tick = setInterval(() => {
+      if (!win || win.closed) { clearInterval(tick); resolve() }
+    }, 700)
+    const listener = () => { try { if (!win || win.closed) resolve() } catch {} }
+    window.addEventListener('message', listener, { once: true })
   })
 }
 

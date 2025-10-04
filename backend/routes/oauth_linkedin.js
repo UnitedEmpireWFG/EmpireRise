@@ -1,130 +1,166 @@
-// backend/routes/oauth_linkedin.js
 import express from 'express'
 import fetch from 'node-fetch'
-import { saveLinkedInToken, kickoffInitialSync } from '../drivers/driver_linkedin_smart.js'
+import * as jose from 'jose'
+import { supaAdmin } from '../db.js'
 
 const router = express.Router()
 
-// Env
-const CLIENT_ID     = process.env.LINKEDIN_CLIENT_ID
-const CLIENT_SECRET = process.env.LINKEDIN_CLIENT_SECRET
-const REDIRECT      = (process.env.LINKEDIN_REDIRECT || '').replace(/\/+$/,'')
-const SCOPES        = (process.env.LINKEDIN_SCOPES || 'r_liteprofile w_member_social')
-  .split(/[ ,]+/).filter(Boolean).join(' ')
-const APP_ORIGIN    = (process.env.APP_ORIGIN || process.env.ORIGIN_APP || '').replace(/\/+$/,'')
-const SUPA_URL      = (process.env.SUPABASE_URL || '').replace(/\/+$/,'')
-const SUPA_ANON     = process.env.SUPABASE_ANON_KEY
+const APP_ORIGIN = (process.env.APP_ORIGIN || process.env.ORIGIN_APP || '').replace(/\/+$/,'')
+const CLIENT_ID = process.env.LINKEDIN_CLIENT_ID || process.env.LI_CLIENT_ID
+const CLIENT_SECRET = process.env.LINKEDIN_CLIENT_SECRET || process.env.LI_CLIENT_SECRET
+const REDIRECT = (
+  process.env.LINKEDIN_REDIRECT ||
+  process.env.LI_REDIRECT ||
+  `${process.env.API_BASE || 'https://empirerise.onrender.com'}/oauth/linkedin/callback`
+).replace(/\/+$/,'')
+const SUPABASE_JWKS_URL = process.env.SUPABASE_JWKS_URL || ''
+const OIDC_SCOPE = 'openid profile email w_member_social'
 
-const AUTH_URL  = 'https://www.linkedin.com/oauth/v2/authorization'
-const TOKEN_URL = 'https://www.linkedin.com/oauth/v2/accessToken'
+const LI_AUTH  = 'https://www.linkedin.com/oauth/v2/authorization'
+const LI_TOKEN = 'https://www.linkedin.com/oauth/v2/accessToken'
+const LI_USERINFO = 'https://api.linkedin.com/v2/userinfo'
 
-function must(name, v) { if (!v) throw new Error(`env_missing:${name}`) }
-
-// Resolve the Supabase user **from the front-end access token** safely via API.
-// This avoids JWT algorithm/verification pitfalls.
-async function supabaseUserFromFrontToken(frontToken) {
-  if (!frontToken) throw new Error('bad_front_token')
-  must('SUPABASE_URL', SUPA_URL)
-  must('SUPABASE_ANON_KEY', SUPA_ANON)
-
-  const r = await fetch(`${SUPA_URL}/auth/v1/user`, {
-    headers: {
-      'Authorization': `Bearer ${frontToken}`,
-      'apikey': SUPA_ANON
-    }
-  })
-  if (!r.ok) throw new Error(`auth_user_http_${r.status}`)
-  const j = await r.json()
-  return { id: j?.id || j?.user?.id || null, email: j?.email || j?.user?.email || null }
+function b64url(str) {
+  return Buffer.from(str).toString('base64url')
+}
+function b64urlDecode(str) {
+  return Buffer.from(String(str || ''), 'base64url').toString('utf8')
 }
 
-// Step 1 — start OAuth
-// Frontend calls:  GET /oauth/linkedin/login?state=<supabase_access_token>
-// (we also accept ?token= for compatibility)
+async function supabaseUserIdFromFrontToken(frontJwt) {
+  if (!frontJwt) return null
+  try {
+    // Best effort verify if JWKS is configured and token is RS256
+    if (SUPABASE_JWKS_URL) {
+      const JWKS = jose.createRemoteJWKSet(new URL(SUPABASE_JWKS_URL))
+      const { payload } = await jose.jwtVerify(frontJwt, JWKS).catch(() => ({ payload: null }))
+      if (payload?.sub) return String(payload.sub)
+    }
+  } catch {}
+  // Fallback decode without verification
+  try {
+    const payload = jose.decodeJwt(frontJwt)
+    if (payload?.sub) return String(payload.sub)
+  } catch {}
+  return null
+}
+
+// GET /oauth/linkedin/login?state=<front_access_token>
 router.get('/login', async (req, res) => {
   try {
-    must('LINKEDIN_CLIENT_ID', CLIENT_ID)
-    must('LINKEDIN_CLIENT_SECRET', CLIENT_SECRET)
-    must('LINKEDIN_REDIRECT', REDIRECT)
+    if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT || !APP_ORIGIN) {
+      const miss = [
+        !CLIENT_ID ? 'LINKEDIN_CLIENT_ID' : null,
+        !CLIENT_SECRET ? 'LINKEDIN_CLIENT_SECRET' : null,
+        !REDIRECT ? 'LINKEDIN_REDIRECT' : null,
+        !APP_ORIGIN ? 'APP_ORIGIN' : null
+      ].filter(Boolean).join(',')
+      console.log('linkedin_login_error missing_env', miss)
+      return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=missing_env_${encodeURIComponent(miss)}`)
+    }
 
     const frontToken = String(req.query.state || req.query.token || '')
-    if (!frontToken) return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=bad_front_token`)
+    if (!frontToken) {
+      console.log('linkedin_login_error bad_front_token')
+      return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=bad_front_token`)
+    }
 
-    const url = new URL(AUTH_URL)
+    const packed = b64url(JSON.stringify({ t: 'li', s: frontToken }))
+    const url = new URL(LI_AUTH)
     url.searchParams.set('response_type', 'code')
     url.searchParams.set('client_id', CLIENT_ID)
     url.searchParams.set('redirect_uri', REDIRECT)
-    url.searchParams.set('scope', SCOPES)
-    url.searchParams.set('state', frontToken) // round-trip so we can identify the user
+    url.searchParams.set('scope', OIDC_SCOPE)
+    url.searchParams.set('state', packed)
+
     return res.redirect(url.toString())
   } catch (e) {
-    console.log('linkedin_login_error', e.message)
-    return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=${encodeURIComponent(e.message)}`)
+    console.log('linkedin_login_error', e?.message)
+    return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=login_failed`)
   }
 })
 
-// Step 2 — OAuth callback
+// GET /oauth/linkedin/callback
 router.get('/callback', async (req, res) => {
-  const code  = String(req.query.code || '')
-  const state = String(req.query.state || '') // this is the supabase access token we sent
-
+  const { code = '', state = '', error = '', error_description = '' } = req.query || {}
   try {
+    console.log('li_cb_url', req.originalUrl)
+
+    if (error) {
+      console.log('linkedin_callback_error_from_provider', error, error_description)
+      return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=${encodeURIComponent(error)}`)
+    }
     if (!code) throw new Error('missing_code')
 
-    // identify the EmpireRise user by calling Supabase
-    const u = await supabaseUserFromFrontToken(state)
-    if (!u?.id) throw new Error('auth_user_missing')
+    let frontToken = ''
+    try {
+      const parsed = JSON.parse(b64urlDecode(state))
+      if (parsed?.t === 'li' && parsed?.s) frontToken = String(parsed.s)
+    } catch {}
+    const userId = await supabaseUserIdFromFrontToken(frontToken)
+    if (!userId) throw new Error('user_not_identified')
 
-    // exchange code → token
     const body = new URLSearchParams({
       grant_type: 'authorization_code',
-      code,
+      code: String(code),
       redirect_uri: REDIRECT,
       client_id: CLIENT_ID,
       client_secret: CLIENT_SECRET
     })
 
-    const tr = await fetch(TOKEN_URL, {
+    const tr = await fetch(LI_TOKEN, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body
     })
     if (!tr.ok) {
-      const txt = await tr.text().catch(()=>'')
-      throw new Error(`token_http_${tr.status}:${txt.slice(0,140)}`)
+      const txt = await tr.text().catch(() => '')
+      throw new Error(`token_http_${tr.status}:${txt.slice(0,200)}`)
     }
-    const tok = await tr.json() // { access_token, expires_in }
-    const accessToken = tok?.access_token
+    const tokenJson = await tr.json().catch(() => null)
+    const accessToken = tokenJson?.access_token || ''
+    const expiresIn = Number(tokenJson?.expires_in || 0)
     if (!accessToken) throw new Error('no_access_token')
 
-    // (optional) try to get LI member id
+    // OIDC userinfo to capture LinkedIn user id
     let liUserId = null
     try {
-      const me = await fetch('https://api.linkedin.com/v2/me', {
-        headers: { Authorization: `Bearer ${accessToken}` }
-      })
-      if (me.ok) {
-        const mj = await me.json().catch(()=> ({}))
-        liUserId = mj?.id ? String(mj.id) : null
+      const ui = await fetch(LI_USERINFO, { headers: { Authorization: `Bearer ${accessToken}` } })
+      if (ui.ok) {
+        const userInfo = await ui.json().catch(() => ({}))
+        liUserId = userInfo?.sub ? String(userInfo.sub) : null
       }
     } catch {}
 
-    // persist token
-    await saveLinkedInToken({
-      userId: u.id,
-      accessToken,
-      expiresIn: Number(tok?.expires_in || 0),
-      linkedinUserId: liUserId
-    })
+    const { error: upErr } = await supaAdmin
+      .from('app_settings')
+      .upsert({
+        user_id: userId,
+        linkedin_access_token: accessToken,
+        linkedin_user_id: liUserId,
+        linkedin_expires_at: expiresIn ? new Date(Date.now() + expiresIn * 1000).toISOString() : null,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'user_id' })
+    if (upErr) throw upErr
 
-    // optionally kick off a first sync
-    kickoffInitialSync(u.id).catch(()=>{})
+    console.log('linkedin_callback_ok', userId)
 
-    console.log('linkedin_callback_ok', u.id)
-    return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=1`)
+    // Close popup and ping opener
+    res.setHeader('Content-Type', 'text/html; charset=utf-8')
+    return res.end(`
+<!doctype html>
+<title>LinkedIn connected</title>
+<script>
+  if (window.opener && !window.opener.closed) {
+    try { window.opener.postMessage({ provider:'linkedin', ok:true }, '*') } catch(e) {}
+  }
+  window.close()
+</script>
+Connected. You can close this window.
+`)
   } catch (e) {
-    console.log('linkedin_callback_error', e.message)
-    return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=0&error=${encodeURIComponent(e.message)}`)
+    console.log('linkedin_callback_error', e?.message)
+    return res.redirect(`${APP_ORIGIN}/settings?connected=linkedin&ok=false&error=${encodeURIComponent(String(e?.message || 'callback_failed'))}`)
   }
 })
 
