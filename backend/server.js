@@ -128,6 +128,7 @@ app.use('/oauth/meta', oauthMeta)
 app.use('/oauth/linkedin', oauthLinkedIn)
 app.use('/webhooks/meta', metaWebhooks)
 app.use('/webhooks/linkedin', linkedinInbound)
+app.use('/api/social', linkedinCookiesUpload)
 
 app.get('/', (_req, res) => res.json({ ok:true, name:'EmpireRise API' }))
 app.get('/auth/ping', (_req, res) => res.json({ ok:true }))
