@@ -1,3 +1,4 @@
+// backend/server.js
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
@@ -7,21 +8,25 @@ import reqlog from './middleware/reqlog.js'
 import { maybeBypass, requireAuth, requireAdmin } from './middleware/auth.js'
 import { timePolicy } from './services/time_windows.js'
 
+/* ===== Health/Auth (PUBLIC) ===== */
 import health from './routes/health.js'
 import healthFull from './routes/health_full.js'
 import auth from './routes/auth.js'
 
+/* ===== OAuth + Webhooks (PUBLIC) ===== */
 import oauthMeta from './routes/oauth_meta.js'
 import oauthLinkedIn from './routes/oauth_linkedin.js'
 import metaWebhooks from './routes/meta_webhooks.js'
 import linkedinInbound from './routes/linkedin_inbound.js'
 
+/* ===== Platform APIs (PROTECTED) ===== */
 import metaIds from './routes/meta_ids.js'
 import meta from './routes/meta.js'
 import importMeta from './routes/import_meta.js'
 import linkedinPost from './routes/linkedin_post.js'
 import importLinkedIn from './routes/import_linkedin.js'
 
+/* ===== App features (PROTECTED) ===== */
 import messagesRoutes from './routes/messages.js'
 import approvalsRoutes from './routes/approvals.js'
 import approvalsBulkRouter from './routes/approvals_bulk.js'
@@ -51,16 +56,19 @@ import offersRouter from './routes/offers.js'
 import igDmRouter from './routes/ig_dm.js'
 import adminUsersRouter from './routes/admin_users.js'
 
+/* ===== LI/FB senders & pollers ===== */
 import { tickLinkedInSender } from './worker/li_dm_sender.js'
 import { tickLinkedInInboxPoller } from './worker/li_inbox_poller.js'
 import { tickFacebookSender } from './worker/fb_dm_sender.js'
 import { tickFacebookInboxPoller } from './worker/fb_inbox_poller.js'
 
+/* ===== Extra routers ===== */
 import liBatchRouter from './routes/li_batch.js'
 import queueBulkRouter from './routes/queue_bulk.js'
 import prospectsRouter from './routes/prospects.js'
 import resolverRouter from './routes/resolver.js'
 
+/* ===== Workers & jobs ===== */
 import './worker/scheduler.js'
 import { startBirthdayCron } from './jobs/birthday_cron.js'
 import { startFollowupsCron } from './jobs/followups_cron.js'
@@ -73,8 +81,10 @@ import { startABHousekeepingCron } from './worker/ab_housekeeping.js'
 import { initLiDailyBatch } from './scheduler/jobs/liDailyBatch.js'
 import globalUserCache from './services/users/cache.js'
 
+/* ===== AI smoke test ===== */
 import { aiComplete } from './lib/ai.js'
 
+/* ===== Status + Cookies Upload ===== */
 import socialStatus from './routes/social_status.js'
 import linkedinCookiesUpload from './routes/linkedin_cookies_upload.js'
 import { startOnConnectSeeder } from './worker/on_connect_seeder.js'
@@ -84,12 +94,14 @@ const APP_ORIGIN = (process.env.APP_ORIGIN || process.env.ORIGIN_APP || '').repl
 const app = express()
 app.set('etag', false)  // prevent 304 cache on identical JSON
 
+/* ---------- keep-alive ---------- */
 app.use((_, res, next) => {
   res.setHeader('Connection', 'keep-alive')
   res.setHeader('Keep-Alive', 'timeout=5')
   next()
 })
 
+/* ---------- CORS (tight) ---------- */
 const NETLIFY_ORIGIN = (process.env.ORIGIN_APP || '').replace(/\/+$/,'')
 const allowList = [ NETLIFY_ORIGIN, 'http://localhost:5173', 'http://localhost:8787' ].filter(Boolean)
 function isAllowedOrigin(origin) {
@@ -115,24 +127,28 @@ app.options('*', (req, res) => {
   res.status(204).end()
 })
 
+/* ---------- body + cookies + logs ---------- */
 app.use(express.json({ limit: '2mb' }))
 app.use(cookieParser())
 app.use(reqlog)
 
+/* ---------- PUBLIC ---------- */
 app.get('/healthz', (_req, res) => res.json({ ok:true, t:Date.now() }))
 app.use('/api/health', health)
 app.use('/api/health/full', healthFull)
 app.use('/auth', auth)
 
+/* OAuth and webhooks are public */
 app.use('/oauth/meta', oauthMeta)
 app.use('/oauth/linkedin', oauthLinkedIn)
 app.use('/webhooks/meta', metaWebhooks)
 app.use('/webhooks/linkedin', linkedinInbound)
-app.use('/api/social', linkedinCookiesUpload)
 
+/* simple public root + ping */
 app.get('/', (_req, res) => res.json({ ok:true, name:'EmpireRise API' }))
 app.get('/auth/ping', (_req, res) => res.json({ ok:true }))
 
+/* ---------- Frontend redirects on API host ---------- */
 app.get('/settings', (_req, res) => {
   if (!APP_ORIGIN) return res.status(404).json({ ok:false, error:'set APP_ORIGIN' })
   res.redirect(`${APP_ORIGIN}/settings`)
@@ -142,9 +158,11 @@ app.get('/login', (_req, res) => {
   res.redirect(`${APP_ORIGIN}/login`)
 })
 
+/* ---------- AUTH WALL for /api/** ONLY ---------- */
 app.use(maybeBypass)
 app.use('/api', requireAuth)
 
+/* ---------- PROTECTED MOUNTS (/api/...) ---------- */
 app.use('/api/meta', metaIds)
 app.use('/api/meta', meta)
 app.use('/api/import/meta', importMeta)
@@ -178,15 +196,22 @@ app.use('/api', threadsRouter)
 app.use('/api', offersRouter)
 app.use('/api', misc)
 
+/* ✅ Status lives under /api/social */
 app.use('/api/social', socialStatus)
+
+/* ✅ Cookies upload lives ONLY under /api/linkedin/cookies (do NOT mount at /api/social) */
 app.use('/api/linkedin/cookies', requireAuth, linkedinCookiesUpload)
 
+/* admin endpoints under /api/admin and require admin */
 app.use('/api/admin', requireAdmin, adminUsersRouter)
+
+/* extra routers */
 app.use('/api/batch', liBatchRouter)
 app.use('/api/queue-bulk', queueBulkRouter)
 app.use('/api/prospects', prospectsRouter)
 app.use('/api/resolve', resolverRouter)
 
+/* ---------- EXAMPLES ---------- */
 app.get('/api/test/ai', async (_req, res) => {
   try { res.json({ ok:true, text: await aiComplete('Write a short friendly check in.') }) }
   catch (e) { res.status(200).json({ ok:false, error:e.message }) }
@@ -199,6 +224,7 @@ app.get('/api/dashboard', (req, res) => {
   })
 })
 
+/* ---------- ERRORS ---------- */
 app.use((err, _req, res, _next) => {
   const msg = err?.message || 'server_error'
   if (msg?.startsWith?.('cors_blocked')) return res.status(403).json({ ok:false, error: msg })
@@ -206,6 +232,7 @@ app.use((err, _req, res, _next) => {
   res.status(200).json({ ok:false, error: msg })
 })
 
+/* ---------- BOOT ---------- */
 const port = process.env.PORT || 8787
 app.listen(port, () => {
   console.log(`EmpireRise API on ${port}`)
