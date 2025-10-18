@@ -1,77 +1,30 @@
-import cron from "node-cron";
-import { supa } from "../../db.js";
-import globalUserCache from "../../services/users/cache.js";
+import cron from 'node-cron'
+import { runLinkedInBatch } from '../../worker/li_batch_runner.js'
 
-function parseCron(cronExpr) {
-  // basic guard
-  return typeof cronExpr === "string" && cronExpr.trim().split(" ").length >= 5
-    ? cronExpr.trim()
-    : "9 0 * * *"; // 00:09 every day default
-}
-
-export function initLiDailyBatch(cache = globalUserCache) {
-  // Read settings for CRON + flag
-  let cronExpr = "9 0 * * *";
-  let enabled = true;
-
-  const prime = async () => {
-    const { data } = await supa
-      .from("app_settings")
-      .select("li_batch_cron, li_batch_enabled")
-      .eq("id", 1)
-      .maybeSingle();
-
-    if (data) {
-      enabled = !!data.li_batch_enabled;
-      cronExpr = parseCron(data.li_batch_cron);
+export function initLiDailyBatch(globalUserCache) {
+  try {
+    // Cancel any previous jobs (if running)
+    if (global.liDailyBatchTask && global.liDailyBatchTask.stop) {
+      global.liDailyBatchTask.stop()
     }
-  };
 
-  const task = cron.schedule(cronExpr, async () => {
-    if (!enabled) return;
-    try {
-      await cache.refresh();
-      const users = cache.list();
-
-      // Example: seed N queue items for each enabled user (customize as needed)
-      for (const u of users) {
-        if (!u.li_daily_enabled) continue;
-        const qty = Number(u.li_daily_quota ?? 10);
-
-        // Insert placeholder “assist LI” rows; your real logic may differ
-        const payload = Array.from({ length: qty }, () => ({
-          platform: "linkedin",
-          status: "scheduled",
-          scheduled_at: new Date().toISOString(),
-          meta: { kind: "li_daily_batch" }
-        }));
-        await supa.from("queue").insert(payload);
+    // Schedule to run every day at 9 AM (adjust as needed)
+    const task = cron.schedule('0 9 * * *', async () => {
+      console.log('[liDailyBatch] Running daily LinkedIn batch job...')
+      try {
+        await runLinkedInBatch(globalUserCache)
+        console.log('[liDailyBatch] Batch completed successfully.')
+      } catch (err) {
+        console.error('[liDailyBatch] Batch run error:', err.message)
       }
-    } catch (e) {
-      console.log("[liDailyBatch] error:", e.message);
-    }
-  });
+    }, { timezone: 'America/Edmonton' })
 
-  // re-arm the job whenever settings change
-  const rearm = async () => {
-    try {
-      await prime();
-      task.stop();
-      task.schedule(parseCron(cronExpr));
-      console.log("liDailyBatch re-armed:", cronExpr, enabled ? "(enabled)" : "(disabled)");
-    } catch (e) {
-      console.log("liDailyBatch re-arm error:", e.message);
-    }
-  };
-
-  // arm on boot
-  prime().then(() => {
-    task.start();
-    console.log("liDailyBatch initialized");
-  });
-
-  // optional: poll settings every 5 min to rearm if changed
-  setInterval(rearm, 5 * 60 * 1000);
+    // Save globally and return for re-arm support
+    global.liDailyBatchTask = task
+    console.log('[liDailyBatch] initialized successfully.')
+    return task
+  } catch (err) {
+    console.error('[liDailyBatch] init error:', err.message)
+    return null
+  }
 }
-
-export default { initLiDailyBatch };
