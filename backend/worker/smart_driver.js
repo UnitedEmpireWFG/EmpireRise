@@ -1,200 +1,227 @@
 // backend/worker/smart_driver.js
-import { supa, supaAdmin } from '../db.js'
+import { supa } from '../db.js'
 import { timePolicy } from '../services/time_windows.js'
-import { generateIntroMessage, generateNurtureFollowup } from '../lib/ai_messages.js'
-import { tickLinkedInSender } from './li_dm_sender.js'
 
-// tiny guard: don't hammer DB if many users
-const SLEEP = (ms) => new Promise(r => setTimeout(r, ms))
+const LOOP_MS = Number(process.env.SMART_DRIVER_INTERVAL_MS || 60_000) // 60s
 
-async function getActiveUsers() {
-  // any user that has a linkedin_access_token is "active"
-  const { data, error } = await supaAdmin
-    .from('app_settings')
-    .select('user_id, linkedin_access_token')
-    .not('linkedin_access_token', 'is', null)
-    .limit(500)
-  if (error) { console.log('smart_driver:getActiveUsers', error.message); return [] }
-  return data?.map(x => x.user_id) || []
+function defaultWithinWorkWindow(cfg, now = new Date()) {
+  // cfg: { tz, days:[1..5], start:'09:00', end:'18:00', quietEnabled:bool, ... }
+  try {
+    const tz = cfg?.tz || 'UTC'
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz, hour12: false, hour: '2-digit', minute: '2-digit', weekday: 'short'
+    })
+    const parts = Object.fromEntries(fmt.formatToParts(now).map(p => [p.type, p.value]))
+    const hhmm = `${parts.hour?.padStart(2,'0')}:${parts.minute?.padStart(2,'0')}`
+    const weekdayMap = { Sun:0, Mon:1, Tue:2, Wed:3, Thu:4, Fri:5, Sat:6 }
+    const dow = weekdayMap[parts.weekday] ?? now.getDay()
+    const allowedDays = Array.isArray(cfg?.days) ? cfg.days : [1,2,3,4,5] // Mon-Fri
+    const start = cfg?.start || '09:00'
+    const end = cfg?.end || '18:00'
+    const isDay = allowedDays.includes(dow)
+    const isTime = hhmm >= start && hhmm <= end
+    // If quietEnabled=false, always allow; if true, restrict to window.
+    return cfg?.quietEnabled ? (isDay && isTime) : true
+  } catch {
+    return true
+  }
 }
 
-/** 1) Pull: import connections (seed) into prospects table if missing */
-async function pullProspectsFor(userId, limit = 50) {
-  // Assumes you already have an importer that fetches connections via cookies/API.
-  // We read from your existing storage (wherever you stash LI contacts) — for demo,
-  // we assume a RPC or a staging view exists. If not, replace with your real fetcher.
+function withinWorkWindow() {
+  const hasFn = typeof timePolicy?.isWithinWorkWindow === 'function'
+  return hasFn ? timePolicy.isWithinWorkWindow(new Date()) : defaultWithinWorkWindow(timePolicy?._cfg, new Date())
+}
+
+async function pullProspects(userId) {
+  // Move staged LI contacts into prospects if not already present.
   try {
-    // Example: suppose you have a materialized view "li_contacts_stage"
-    // columns: user_id, li_profile_id, full_name, headline, location, company, title
-    const { data, error } = await supaAdmin
+    // read staged rows
+    const { data: staged, error: stgErr } = await supa
       .from('li_contacts_stage')
-      .select('li_profile_id, full_name, headline, location, company, title')
+      .select('*')
       .eq('user_id', userId)
-      .order('full_name', { ascending: true })
-      .limit(limit)
+      .limit(200)
+    if (stgErr) throw new Error(`stage_load ${stgErr.message}`)
+    if (!staged?.length) return { imported: 0 }
 
-    if (error) { console.log('pullProspects:stage_error', error.message); return 0 }
-    if (!data || !data.length) return 0
+    let imported = 0
+    for (const row of staged) {
+      // Check if a prospect exists by (user_id, public_id) or fallback on full_name+company
+      const { data: exists } = await supa
+        .from('prospects')
+        .select('id')
+        .eq('user_id', userId)
+        .or([
+          row.public_id ? `public_id.eq.${row.public_id}` : null,
+          (row.full_name && row.company) ? `and(full_name.eq.${row.full_name},company.eq.${row.company})` : null
+        ].filter(Boolean).join(','))
+        .limit(1)
+        .maybeSingle()
 
-    // upsert into prospects
-    const rows = data.map(x => ({
-      user_id: userId,
-      li_profile_id: x.li_profile_id,
-      full_name: x.full_name,
-      headline: x.headline,
-      location: x.location,
-      company: x.company,
-      title: x.title,
-      source: 'contacts',
-      kind: 'connection'
-    }))
-
-    const { error: upErr } = await supaAdmin
-      .from('prospects')
-      .upsert(rows, { onConflict: 'user_id,li_profile_id' })
-    if (upErr) { console.log('pullProspects:upsert_error', upErr.message); return 0 }
-
-    return rows.length
-  } catch (e) {
-    console.log('pullProspects:error', e.message)
-    return 0
-  }
-}
-
-/** 2) Score leads: simple heuristic that’s actually useful */
-function scoreProspect(p) {
-  let s = 0
-  if (p.title) {
-    const t = p.title.toLowerCase()
-    if (/\b(founder|owner|ceo|partner|principal)\b/.test(t)) s += 30
-    if (/\b(lead|head|director|vp|svp|cxo)\b/.test(t)) s += 20
-  }
-  if (p.company && p.company.length >= 3) s += 10
-  if (p.location && /canada|toronto|edmonton|vancouver|calgary/i.test(p.location)) s += 10
-  if (p.headline && /growth|sales|marketing|revenue|hiring/i.test(p.headline)) s += 10
-  return s
-}
-
-async function scoreLeadsFor(userId, batch = 100) {
-  const { data, error } = await supaAdmin
-    .from('prospects')
-    .select('id, full_name, title, company, location, headline, score')
-    .eq('user_id', userId)
-    .in('status', ['new', 'review'])
-    .order('updated_at', { ascending: true })
-    .limit(batch)
-  if (error) { console.log('scoreLeads:load_error', error.message); return 0 }
-  if (!data?.length) return 0
-
-  const updates = data.map(p => ({ id: p.id, score: scoreProspect(p), updated_at: new Date().toISOString() }))
-  const { error: upErr } = await supaAdmin.from('prospects').upsert(updates)
-  if (upErr) { console.log('scoreLeads:upsert_error', upErr.message); return 0 }
-  return updates.length
-}
-
-/** 3) Draft & enqueue messages */
-async function draftAndEnqueueFor(userId, maxDrafts = 20) {
-  // pick best un-messaged prospects
-  const { data: prospects, error } = await supaAdmin
-    .from('prospects')
-    .select('id, li_profile_id, full_name, title, company, location, headline, status')
-    .eq('user_id', userId)
-    .eq('status', 'new')
-    .order('score', { ascending: false })
-    .limit(maxDrafts)
-
-  if (error) { console.log('enqueue:load_error', error.message); return 0 }
-  if (!prospects?.length) return 0
-
-  const enqueued = []
-  for (const p of prospects) {
-    const ctx = {
-      name: p.full_name,
-      title: p.title,
-      company: p.company,
-      headline: p.headline,
-      location: p.location
-    }
-    const text = await generateIntroMessage(ctx)
-    if (!text) continue
-
-    // enqueue
-    const { error: qErr, data: qRows } = await supaAdmin
-      .from('outbound_queue')
-      .insert({
-        user_id: userId,
-        channel: 'linkedin_dm',
-        to_profile_id: p.li_profile_id || null,
-        prospect_id: p.id,
-        message_text: text,
-        status: 'scheduled'
-      })
-      .select('id')
-
-    if (qErr) { console.log('enqueue:insert_error', qErr.message); continue }
-
-    // mark prospect as "messaged" (but still waiting to be sent)
-    await supaAdmin.from('prospects').update({
-      status: 'messaged',
-      updated_at: new Date().toISOString()
-    }).eq('id', p.id)
-
-    enqueued.push(qRows?.[0]?.id)
-    // small spacing to avoid bursting token usage
-    await SLEEP(80)
-  }
-
-  return enqueued.length
-}
-
-/** 4) Dispatch (use your existing sender loop) */
-async function dispatchNow() {
-  try {
-    await tickLinkedInSender()
-  } catch (e) {
-    console.log('dispatchNow:sender_error', e.message)
-  }
-}
-
-/** Orchestrate per user in a pass */
-async function runPassFor(userId) {
-  // Pull
-  const pulled = await pullProspectsFor(userId, 80)
-  if (pulled) console.log('smart_driver:pulled', userId, pulled)
-
-  // Score
-  const scored = await scoreLeadsFor(userId, 120)
-  if (scored) console.log('smart_driver:scored', userId, scored)
-
-  // Draft
-  const drafted = await draftAndEnqueueFor(userId, 30)
-  if (drafted) console.log('smart_driver:drafted', userId, drafted)
-
-  // Dispatch in work window only
-  if (timePolicy.isWithinWorkWindow(new Date())) {
-    await dispatchNow()
-  } else {
-    console.log('smart_driver:outside_work_window')
-  }
-}
-
-/** Public starter */
-export function startSmartDriver() {
-  // run frequently but light
-  const everyMs = Math.max(30_000, Number(process.env.SMART_DRIVER_INTERVAL_MS || 60_000))
-  const loop = async () => {
-    try {
-      const users = await getActiveUsers()
-      for (const uid of users) {
-        await runPassFor(uid)
-        await SLEEP(150) // tiny breath between users
+      if (!exists) {
+        const title = row.headline || null
+        const insert = {
+          user_id: userId,
+          public_id: row.public_id || null,
+          full_name: row.full_name || null,
+          title,
+          company: row.company || null,
+          region: row.region || null,
+          source: 'linkedin',
+          status: 'new',
+          meta: row.raw || {}
+        }
+        const { error: insErr } = await supa.from('prospects').insert(insert)
+        if (!insErr) imported++
       }
-    } catch (e) {
-      console.log('smart_driver:loop_error', e.message)
-    } finally {
-      setTimeout(loop, everyMs)
     }
+    return { imported }
+  } catch (e) {
+    console.log('pullProspects:stage_error', e.message)
+    return { imported: 0, error: e.message }
   }
-  console.log('SmartDriver started, interval(ms)=', everyMs)
-  loop()
+}
+
+function scoreOneProspect(p) {
+  // toy scorer: boost title/region matches
+  const wantRegion = (process.env.DEFAULT_REGION || '').toLowerCase()
+  const wantTitle = (process.env.DEFAULT_TITLE || '').toLowerCase()
+  const title = (p.title || p.headline || '').toLowerCase()
+  const region = (p.region || '').toLowerCase()
+
+  let s = 50
+  if (wantRegion && region.includes(wantRegion)) s += 20
+  if (wantTitle && title.includes(wantTitle)) s += 20
+  if (p.company) s += 5
+  if (p.meta?.mutuals) s += Math.min(5, (p.meta.mutuals|0))
+  return Math.max(1, Math.min(99, s))
+}
+
+async function scoreLeads(userId) {
+  try {
+    // load unscored prospects
+    const { data: prospects, error } = await supa
+      .from('prospects')
+      .select('id, user_id, full_name, title, headline, company, region, meta, score')
+      .eq('user_id', userId)
+      .is('archived_at', null)
+      .or('score.is.null,score.lt.1')
+      .limit(200)
+    if (error) throw new Error(error.message)
+    if (!prospects?.length) return { scored: 0 }
+
+    let scored = 0
+    for (const p of prospects) {
+      const next = scoreOneProspect(p)
+      const { error: upErr } = await supa
+        .from('prospects')
+        .update({ score: next, updated_at: new Date().toISOString() })
+        .eq('id', p.id)
+        .eq('user_id', userId)
+      if (!upErr) scored++
+    }
+    return { scored }
+  } catch (e) {
+    console.log('scoreLeads:load_error', e.message)
+    return { scored: 0, error: e.message }
+  }
+}
+
+async function enqueueDrafts(userId) {
+  try {
+    // pull top prospects without drafts in queue
+    const { data: tops, error } = await supa
+      .from('prospects')
+      .select('id, user_id, full_name, title, headline, company, region, score, status')
+      .eq('user_id', userId)
+      .gte('score', 70)
+      .neq('status', 'contacted')
+      .limit(30)
+    if (error) throw new Error(error.message)
+
+    let enq = 0
+    for (const p of tops || []) {
+      // check if already queued
+      const { data: q } = await supa
+        .from('queue')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('prospect_id', p.id)
+        .in('status', ['scheduled','draft','pending'])
+        .limit(1)
+      if (q?.length) continue
+
+      const name = p.full_name || 'there'
+      const role = p.title || p.headline || ''
+      const opener = `Hey ${name.split(' ')[0]}, loved your work around ${role || 'your area'}.`
+      const body = `Curious if you’re open to a quick chat—I've got an idea that could fit what you're doing at ${p.company || 'your team'}.`
+
+      const draft = `${opener} ${body}`
+
+      const { error: insErr } = await supa.from('queue').insert({
+        user_id: userId,
+        prospect_id: p.id,
+        channel: 'linkedin',
+        type: 'dm',
+        status: 'draft',
+        payload: { text: draft }
+      })
+      if (!insErr) enq++
+    }
+    return { enqueued: enq }
+  } catch (e) {
+    console.log('enqueue:load_error', e.message)
+    return { enqueued: 0, error: e.message }
+  }
+}
+
+async function sendIfWindow(userId) {
+  if (!withinWorkWindow()) return { sent: 0, skipped: true }
+  // Move a few drafts to 'scheduled' or send immediately (depending on your sender)
+  const { data: drafts, error } = await supa
+    .from('queue')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('status', 'draft')
+    .eq('channel', 'linkedin')
+    .limit(10)
+  if (error || !drafts?.length) return { sent: 0 }
+
+  let cnt = 0
+  for (const d of drafts) {
+    const { error: upErr } = await supa
+      .from('queue')
+      .update({ status: 'scheduled', scheduled_for: new Date().toISOString() })
+      .eq('id', d.id)
+    if (!upErr) cnt++
+  }
+  return { sent: cnt }
+}
+
+async function loopOnce() {
+  // Choose the *current* authenticated user for single-user app.
+  // If multi-tenant, iterate users here.
+  const { data: me } = await supa.rpc('get_current_user_id') // optional; if not defined, fallback
+  const userId = me?.id || process.env.DEBUG_USER_ID // provide DEBUG_USER_ID if needed
+
+  if (!userId) return
+
+  const a = await pullProspects(userId)
+  const b = await scoreLeads(userId)
+  const c = await enqueueDrafts(userId)
+  const d = await sendIfWindow(userId)
+
+  if (a?.error) console.log('pullProspects:error', a.error)
+  if (b?.error) console.log('scoreLeads:error', b.error)
+  if (c?.error) console.log('enqueue:error', c.error)
+  if (d?.skipped) console.log('send:skipped (outside work window)')
+
+  // Optional: concise heartbeat
+  console.log(`SmartDriver tick uid=${userId} imported=${a.imported||0} scored=${b.scored||0} enqueued=${c.enqueued||0} movedToScheduled=${d.sent||0}`)
+}
+
+export function startSmartDriver() {
+  const ms = LOOP_MS
+  console.log('SmartDriver started, interval(ms)=', ms)
+  setInterval(() => loopOnce().catch(e => console.log('smart_driver:loop_error', e.message)), ms)
 }

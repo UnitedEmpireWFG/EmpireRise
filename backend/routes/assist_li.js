@@ -1,44 +1,39 @@
-import { Router } from "express"
-import db from "../utils/db.js"
+// backend/routes/assist_li.js
+import { Router } from 'express'
+import { generateDraft } from '../lib/ai_drafts.js'
+import { supa } from '../db.js'
+import { timePolicy } from '../services/time_windows.js'
 
 const router = Router()
 
-router.get("/", async (_req, res) => {
-  try {
-    const { rows } = await db.query(
-      `select id, text, message, content
-         from queue
-        where platform='linkedin' and status in ('ready','scheduled')
-        order by scheduled_at asc nulls last, created_at asc
-        limit 1`
-    )
-    const m = rows[0]
-    if (!m) return res.json({})
-    res.json({ id:m.id, text:m.text||m.message||m.content, link:"https://www.linkedin.com/messaging/" })
-  } catch (e) {
-    res.status(500).json({ ok:false, error:e.message })
-  }
-})
+async function getUserProfile(userId) {
+  const { data } = await supa
+    .from('profiles')
+    .select('id, first_name, company, calendly_url, persona')
+    .eq('id', userId)
+    .single()
+  return data || { id: userId }
+}
 
-router.get("/:id", async (req, res) => {
+router.post('/draft', async (req, res) => {
   try {
-    const id = req.params.id
-    const { rows } = await db.query(`select id, text, message, content from queue where id=$1`, [id])
-    const m = rows[0]
-    if (!m) return res.json({})
-    res.json({ id:m.id, text:m.text||m.message||m.content, link:"https://www.linkedin.com/messaging/" })
-  } catch (e) {
-    res.status(500).json({ ok:false, error:e.message })
-  }
-})
+    const userId = req.user?.id || req.user?.sub
+    if (!userId) return res.status(401).json({ ok:false, error:'unauthorized' })
 
-router.post("/:id/sent", async (req, res) => {
-  try {
-    const id = req.params.id
-    await db.query(`update queue set status='sent', sent_at=now() where id=$1`, [id])
-    res.json({ ok:true })
+    const user = await getUserProfile(userId)
+    const person = req.body?.person || {}   // { full_name, role, company, region, topic, intent_hint }
+    const thread = req.body?.thread || {}   // { last_inbound, last_outbound, summary }
+    const settings = {
+      tone: req.body?.tone || 'warm, concise, and human',
+      goal: req.body?.goal || 'qualify and move toward a concrete next step',
+      operating_hours: timePolicy._cfg
+    }
+
+    const draft = await generateDraft({ user, person, thread, settings })
+    return res.json({ ok:true, draft })
   } catch (e) {
-    res.status(500).json({ ok:false, error:e.message })
+    console.log('assist_li_draft_error', e?.message)
+    return res.status(200).json({ ok:false, error: e?.message || 'draft_error' })
   }
 })
 
