@@ -81,6 +81,9 @@ import { startABHousekeepingCron } from './worker/ab_housekeeping.js'
 import { initLiDailyBatch } from './scheduler/jobs/liDailyBatch.js'
 import globalUserCache from './services/users/cache.js'
 
+/* ===== Smart driver (24/7 brain) ===== */
+import { startSmartDriver } from './worker/smart_driver.js'
+
 /* ===== AI smoke test ===== */
 import { aiComplete } from './lib/ai.js'
 
@@ -90,9 +93,14 @@ import linkedinCookiesUpload from './routes/linkedin_cookies_upload.js'
 import { startOnConnectSeeder } from './worker/on_connect_seeder.js'
 
 const APP_ORIGIN = (process.env.APP_ORIGIN || process.env.ORIGIN_APP || '').replace(/\/+$/,'')
+const NETLIFY_ORIGIN = (process.env.ORIGIN_APP || '').replace(/\/+$/,'')
+const APP_PORT = process.env.PORT || 8787
 
 const app = express()
-app.set('etag', false)  // prevent 304 cache on identical JSON
+
+/* ---------- Express hygiene ---------- */
+app.set('etag', false) // avoid stale 304s on JSON
+app.set('trust proxy', true) // render/proxies
 
 /* ---------- keep-alive ---------- */
 app.use((_, res, next) => {
@@ -101,9 +109,9 @@ app.use((_, res, next) => {
   next()
 })
 
-/* ---------- CORS (tight) ---------- */
-const NETLIFY_ORIGIN = (process.env.ORIGIN_APP || '').replace(/\/+$/,'')
-const allowList = [ NETLIFY_ORIGIN, 'http://localhost:5173', 'http://localhost:8787' ].filter(Boolean)
+/* ---------- CORS ---------- */
+const allowList = [ NETLIFY_ORIGIN, APP_ORIGIN, 'http://localhost:5173', 'http://localhost:8787' ]
+  .filter(Boolean)
 function isAllowedOrigin(origin) {
   if (!origin) return true
   if (allowList.includes(origin)) return true
@@ -115,7 +123,8 @@ app.use(cors({
   origin(origin, cb) { isAllowedOrigin(origin) ? cb(null, true) : cb(new Error(`cors_blocked ${origin || 'no_origin'}`)) },
   methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS','HEAD'],
   allowedHeaders: ['Content-Type','Authorization','x-app-key'],
-  credentials: true, maxAge: 600
+  credentials: true,
+  maxAge: 600
 }))
 app.options('*', (req, res) => {
   const origin = req.headers.origin || ''
@@ -128,7 +137,7 @@ app.options('*', (req, res) => {
 })
 
 /* ---------- body + cookies + logs ---------- */
-app.use(express.json({ limit: '2mb' }))
+app.use(express.json({ limit: '5mb' }))
 app.use(cookieParser())
 app.use(reqlog)
 
@@ -138,7 +147,7 @@ app.use('/api/health', health)
 app.use('/api/health/full', healthFull)
 app.use('/auth', auth)
 
-/* OAuth and webhooks are public */
+/* OAuth + webhooks (public) */
 app.use('/oauth/meta', oauthMeta)
 app.use('/oauth/linkedin', oauthLinkedIn)
 app.use('/webhooks/meta', metaWebhooks)
@@ -196,13 +205,13 @@ app.use('/api', threadsRouter)
 app.use('/api', offersRouter)
 app.use('/api', misc)
 
-/* ✅ Status lives under /api/social */
+/* ✅ Status under /api/social */
 app.use('/api/social', socialStatus)
 
-/* ✅ Cookies upload lives ONLY under /api/linkedin/cookies (do NOT mount at /api/social) */
+/* ✅ Cookies upload ONLY under /api/linkedin/cookies */
 app.use('/api/linkedin/cookies', requireAuth, linkedinCookiesUpload)
 
-/* admin endpoints under /api/admin and require admin */
+/* admin endpoints */
 app.use('/api/admin', requireAdmin, adminUsersRouter)
 
 /* extra routers */
@@ -213,8 +222,12 @@ app.use('/api/resolve', resolverRouter)
 
 /* ---------- EXAMPLES ---------- */
 app.get('/api/test/ai', async (_req, res) => {
-  try { res.json({ ok:true, text: await aiComplete('Write a short friendly check in.') }) }
-  catch (e) { res.status(200).json({ ok:false, error:e.message }) }
+  try {
+    const text = await aiComplete('Write a short friendly check in.')
+    res.json({ ok:true, text })
+  } catch (e) {
+    res.status(200).json({ ok:false, error:e.message })
+  }
 })
 app.get('/api/dashboard', (req, res) => {
   res.json({
@@ -233,18 +246,24 @@ app.use((err, _req, res, _next) => {
 })
 
 /* ---------- BOOT ---------- */
-const port = process.env.PORT || 8787
-app.listen(port, () => {
-  console.log(`EmpireRise API on ${port}`)
+app.listen(APP_PORT, () => {
+  console.log(`EmpireRise API on ${APP_PORT}`)
   console.log('Auth bypass:', String(process.env.AUTH_BYPASS || 'false'))
   console.log('Work window policy:', timePolicy._cfg)
 
+  // init the daily batch safely (avoid crashing if scheduler lib not ready)
   const safeInitLiBatch = () => {
-    try { initLiDailyBatch(globalUserCache); console.log('liDailyBatch initialized') }
-    catch (e) { console.log('initLiDailyBatch skipped:', e.message); setTimeout(safeInitLiBatch, 60_000) }
+    try {
+      initLiDailyBatch(globalUserCache)
+      console.log('liDailyBatch initialized')
+    } catch (e) {
+      console.log('initLiDailyBatch skipped:', e.message)
+      setTimeout(safeInitLiBatch, 60_000)
+    }
   }
   safeInitLiBatch()
 
+  // background loops (guarded by env flags)
   if (String(process.env.LI_SENDER_ENABLED || 'true') === 'true') {
     setInterval(() => tickLinkedInSender().catch(()=>{}), 45_000)
   }
@@ -260,6 +279,14 @@ app.listen(port, () => {
     setInterval(() => tickFacebookInboxPoller().catch(()=>{}), fbPollEvery * 1000)
   }
 
-  // start small seeder that runs right after a successful OAuth connect
+  // 24/7 “brain” loop (scoring, drafting, enrichment)
+  try {
+    startSmartDriver()
+    console.log('Smart driver started')
+  } catch (e) {
+    console.log('Smart driver failed to start:', e.message)
+  }
+
+  // seed right after successful OAuth connect
   startOnConnectSeeder().catch(()=>{})
 })
