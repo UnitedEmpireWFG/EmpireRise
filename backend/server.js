@@ -177,7 +177,12 @@ app.use('/api/meta', metaIds)
 app.use('/api/meta', meta)
 app.use('/api/import/meta', importMeta)
 app.use('/api/linkedin', linkedinPost)
+
+// Original mount
 app.use('/api/import/linkedin', importLinkedIn)
+// Alias so POST /api/import/linkedin/contacts works too
+app.use('/api/import/linkedin/contacts', importLinkedIn)
+
 app.use('/api', igDmRouter)
 
 app.use('/api/messages', messagesRoutes)
@@ -207,17 +212,16 @@ app.use('/api', offersRouter)
 app.use('/api', misc)
 app.use('/api/smart', smartAdminRouter)
 
-/* ✅ Status under /api/social */
+/* â Status under /api/social */
 app.use('/api/social', socialStatus)
 
-/* ✅ Cookies upload ONLY under /api/linkedin/cookies */
+/* â Cookies upload ONLY under /api/linkedin/cookies */
 app.use('/api/linkedin/cookies', requireAuth, linkedinCookiesUpload)
 
 /* admin endpoints */
 app.use('/api/admin', requireAdmin, adminUsersRouter)
 
 /* extra routers */
-
 app.use('/api/batch', liBatchRouter)
 app.use('/api/queue-bulk', queueBulkRouter)
 app.use('/api/prospects', prospectsRouter)
@@ -258,7 +262,7 @@ app.listen(APP_PORT, () => {
   const safeInitLiBatch = () => {
     try {
       initLiDailyBatch(globalUserCache)
-      console.log('liDailyBatch initialized')
+      console.log('[liDailyBatch] initialized successfully.')
     } catch (e) {
       console.log('initLiDailyBatch skipped:', e.message)
       setTimeout(safeInitLiBatch, 60_000)
@@ -282,7 +286,7 @@ app.listen(APP_PORT, () => {
     setInterval(() => tickFacebookInboxPoller().catch(()=>{}), fbPollEvery * 1000)
   }
 
-  // 24/7 “brain” loop (scoring, drafting, enrichment)
+  // 24/7 âbrainâ loop (scoring, drafting, enrichment)
   try {
     startSmartDriver()
     console.log('Smart driver started')
