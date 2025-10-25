@@ -55,6 +55,7 @@ import threadsRouter from './routes/threads.js'
 import offersRouter from './routes/offers.js'
 import igDmRouter from './routes/ig_dm.js'
 import adminUsersRouter from './routes/admin_users.js'
+import smartAdminRouter from './routes/smart_admin.js'
 
 /* ===== LI/FB senders & pollers ===== */
 import { tickLinkedInSender } from './worker/li_dm_sender.js'
@@ -204,6 +205,7 @@ app.use('/api', templatesRouter)
 app.use('/api', threadsRouter)
 app.use('/api', offersRouter)
 app.use('/api', misc)
+app.use('/api/smart', smartAdminRouter)
 
 /* ✅ Status under /api/social */
 app.use('/api/social', socialStatus)
@@ -215,6 +217,7 @@ app.use('/api/linkedin/cookies', requireAuth, linkedinCookiesUpload)
 app.use('/api/admin', requireAdmin, adminUsersRouter)
 
 /* extra routers */
+
 app.use('/api/batch', liBatchRouter)
 app.use('/api/queue-bulk', queueBulkRouter)
 app.use('/api/prospects', prospectsRouter)
