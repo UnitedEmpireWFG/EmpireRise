@@ -27,13 +27,17 @@ export async function startGrowthScheduler() {
 }
 
 async function tickOnce() {
-  const { data: sRows } = await supa.from('app_settings').select('*').limit(1)
-  const s = (sRows && sRows[0]) || {}
-  const tz = s.timezone || process.env.TZ || 'America/Edmonton'
+  const { data: s } = await supa
+    .from('app_config')
+    .select('*')
+    .eq('id', 1)
+    .maybeSingle()
+  const settings = s || {}
+  const tz = settings.timezone || process.env.TZ || 'America/Edmonton'
   if (!withinHumanWindow(tz)) return
 
-  const perTick = Math.max(1, Number(s.per_tick ?? 3))
-  const mix = s.platform_mix || { linkedin:50, instagram:30, facebook:20 }
+  const perTick = Math.max(1, Number(settings.per_tick ?? 3))
+  const mix = settings.platform_mix || { linkedin:50, instagram:30, facebook:20 }
 
   // simple sampler by mix
   const basket = []
@@ -59,7 +63,7 @@ async function tickOnce() {
       .eq('platform', platform)
 
     const capKey = platform === 'instagram' ? 'cap_instagram' : platform === 'linkedin' ? 'cap_linkedin' : 'cap_facebook'
-    const cap = Math.max(0, Number(s[capKey] ?? (platform === 'linkedin' ? 80 : 60)))
+    const cap = Math.max(0, Number(settings[capKey] ?? (platform === 'linkedin' ? 80 : 60)))
     if ((sentToday?.length || 0) >= cap) continue
 
     // one item

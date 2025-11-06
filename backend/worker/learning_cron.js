@@ -36,15 +36,15 @@ async function updateTimingHints() {
     .map(x => x.hour)
 
   const { data: cur } = await supa
-    .from("app_settings")
+    .from("app_config")
     .select("id, timezone")
-    .order("updated_at",{ascending:false})
-    .limit(1)
+    .eq("id", 1)
+    .maybeSingle()
 
-  const row = cur && cur[0]
-  if (row) {
-    await supa.from("app_settings").update({
-      metadata: { hot_hours: hot }   // you can add "metadata jsonb" to app_settings if you want; if not, skip this write.
+  const row = Array.isArray(cur) ? cur[0] : cur
+  if (row?.id) {
+    await supa.from("app_config").update({
+      metadata: { hot_hours: hot }
     }).eq("id", row.id).catch(()=>{})
   }
 }

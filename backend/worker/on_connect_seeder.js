@@ -49,22 +49,25 @@ async function seedForUser(userId) {
     const rows = list.map(p => ({
       user_id: userId,
       source: 'linkedin_suggested',
-      li_handle: p.handle,
+      li_handle: p.handle || null,
       name: p.name || null,
       headline: p.headline || null,
-      location_text: p.location || null,
-      open_to_work: !!p.open_to_work,
-      created_at: new Date().toISOString()
+      title: p.title || null,
+      location: p.location || null,
+      region: p.location || null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
     }))
     await supaAdmin.from('prospects').upsert(rows, { onConflict: 'user_id,li_handle' })
 
     const drafts = rows.slice(0, Math.min(5, rows.length)).map(r => ({
       user_id: r.user_id,
       li_handle: r.li_handle,
-      channel: 'linkedin',
+      platform: 'linkedin',
       body: `Hi ${r.name?.split(' ')?.[0] || ''} — quick intro. Enjoyed your background. Open to connect?`,
       status: 'draft',
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
     }))
     if (drafts.length) await supaAdmin.from('drafts').insert(drafts)
   } catch (e) {

@@ -23,7 +23,7 @@ router.get("/api/dashboard/summary", async (_req, res) => {
     const quals   = (await db.query("select count(*)::int as c from leads where qualified_at >= $1", [since])).rows[0]?.c || 0
     const books   = (await db.query("select count(*)::int as c from bookings where created_at >= $1", [since])).rows[0]?.c || 0
 
-    const s = (await db.query("select * from app_settings order by updated_at desc limit 1")).rows[0] || {}
+    const s = (await db.query("select * from app_config where id=1")).rows[0] || {}
     const wc = {
       open: s.rate_open ?? 0.25,
       reply: s.rate_reply ?? 0.08,

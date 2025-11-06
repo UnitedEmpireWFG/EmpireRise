@@ -75,7 +75,7 @@ function computePlan(s) {
 r.get("/", async (_req, res) => {
   try {
     const { data, error } = await supa
-      .from("app_settings")
+      .from("app_config")
       .select("*")
       .eq("id", 1)
       .maybeSingle()
@@ -122,7 +122,7 @@ r.post("/", async (req, res) => {
     }
 
     const { data, error } = await supa
-      .from("app_settings")
+      .from("app_config")
       .upsert(payload, { onConflict: "id" })
       .select()
       .eq("id", 1)
