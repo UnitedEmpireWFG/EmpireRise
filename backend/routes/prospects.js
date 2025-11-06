@@ -61,24 +61,10 @@ function stageLabel(key = '') {
 }
 
 async function summarizeProspects({ userId }) {
-  let query = supa
+  const { data, error } = await supa
     .from('prospects')
-    .select('stage,status,dnc,count:id', { head: false })
+    .select('id,stage,status,dnc')
     .eq('user_id', userId)
-
-  let { data, error } = await query
-
-  if (error) {
-    const msg = String(error.message || error).toLowerCase()
-    if (msg.includes('column') && msg.includes('dnc')) {
-      const fallback = await supa
-        .from('prospects')
-        .select('stage,status,count:id', { head: false })
-        .eq('user_id', userId)
-      data = fallback.data
-      error = fallback.error
-    }
-  }
 
   if (error) throw error
 
@@ -88,12 +74,6 @@ async function summarizeProspects({ userId }) {
   let dncTotal = 0
 
   for (const row of data || []) {
-    const count = Number(
-      row.count ?? row.count_id ?? row.countId ?? row.cnt ?? 0
-    ) || 0
-
-    if (!count) continue
-
     const isDnc =
       row.dnc === true ||
       row.dnc === 'true' ||
@@ -102,15 +82,15 @@ async function summarizeProspects({ userId }) {
     const stageKey = String(row.stage || row.status || (isDnc ? 'dnc' : 'unknown')).toLowerCase()
     const statusKey = String(row.status || row.stage || (isDnc ? 'dnc' : 'unknown')).toLowerCase()
 
-    total += count
-    if (isDnc || stageKey === 'dnc' || statusKey === 'dnc') dncTotal += count
+    total += 1
+    if (isDnc || stageKey === 'dnc' || statusKey === 'dnc') dncTotal += 1
 
     const stageEntry = stages.get(stageKey) || { key: stageKey, count: 0, statuses: new Map() }
-    stageEntry.count += count
-    stageEntry.statuses.set(statusKey, (stageEntry.statuses.get(statusKey) || 0) + count)
+    stageEntry.count += 1
+    stageEntry.statuses.set(statusKey, (stageEntry.statuses.get(statusKey) || 0) + 1)
     stages.set(stageKey, stageEntry)
 
-    statuses.set(statusKey, (statuses.get(statusKey) || 0) + count)
+    statuses.set(statusKey, (statuses.get(statusKey) || 0) + 1)
   }
 
   const orderedStages = Array.from(stages.values()).sort((a, b) => {
