@@ -56,6 +56,7 @@ import offersRouter from './routes/offers.js'
 import igDmRouter from './routes/ig_dm.js'
 import adminUsersRouter from './routes/admin_users.js'
 import smartAdminRouter from './routes/smart_admin.js'
+import connectionsRouter from './routes/connections.js'
 
 /* ===== LI/FB senders & pollers ===== */
 import { tickLinkedInSender } from './worker/li_dm_sender.js'
@@ -80,6 +81,7 @@ import { startLearningCron } from './worker/learning_cron.js'
 import { startGhostNudgesCron } from './worker/ghost_nudges.js'
 import { startABHousekeepingCron } from './worker/ab_housekeeping.js'
 import { initLiDailyBatch } from './scheduler/jobs/liDailyBatch.js'
+import { startConnectQueueWorker } from './worker/connect_queue_runner.js'
 import globalUserCache from './services/users/cache.js'
 
 /* ===== Smart driver (24/7 brain) ===== */
@@ -211,6 +213,7 @@ app.use('/api', threadsRouter)
 app.use('/api', offersRouter)
 app.use('/api', misc)
 app.use('/api/smart', smartAdminRouter)
+app.use('/api/connections', connectionsRouter)
 
 /* â Status under /api/social */
 app.use('/api/social', socialStatus)
@@ -259,6 +262,10 @@ app.listen(APP_PORT, () => {
   console.log('Work window policy:', timePolicy._cfg)
 
   // init the daily batch safely (avoid crashing if scheduler lib not ready)
+  if (String(process.env.CONNECT_QUEUE_ENABLED || 'true') === 'true') {
+    startConnectQueueWorker()
+  }
+
   const safeInitLiBatch = () => {
     try {
       initLiDailyBatch(globalUserCache)
