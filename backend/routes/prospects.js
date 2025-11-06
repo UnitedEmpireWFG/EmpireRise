@@ -24,6 +24,7 @@ function sanitizeProspectRow(row = {}) {
     dnc_reason: row.dnc_reason || null,
     note: row.note || null,
     profile_urls: row.profile_urls || row.links || null,
+    links: row.links || row.profile_urls || null,
     public_id: row.public_id || null,
     li_profile_id: row.li_profile_id || null,
     score: typeof row.score === 'number' ? row.score : row.score ? Number(row.score) || null : null,
