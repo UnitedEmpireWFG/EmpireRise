@@ -165,7 +165,7 @@ async function fetchProspects({ userId, limit = 50, includeDnc = false }) {
     .limit(safeLimit)
 
   if (!includeDnc) {
-    query.eq('dnc', false)
+    query.or('dnc.is.false,dnc.is.null')
   } else {
     query.eq('dnc', true)
   }
@@ -293,12 +293,13 @@ router.post('/:id/dnc', async (req, res) => {
     const { id } = req.params
     const reason = req.body?.reason || 'manual'
 
-  const patch = {
-    dnc: true,
-    dnc_reason: reason,
-    status: 'dnc',
-    updated_at: new Date().toISOString()
-  }
+    const patch = {
+      dnc: true,
+      dnc_reason: reason,
+      status: 'dnc',
+      stage: 'dnc',
+      updated_at: new Date().toISOString()
+    }
 
     const { data, error } = await supa
       .from('prospects')
@@ -323,10 +324,11 @@ router.post('/:id/convert', async (req, res) => {
     if (!userId) return res.status(401).json({ ok: false, error: 'unauthorized' })
     const { id } = req.params
 
-  const patch = {
-    status: 'converted',
-    updated_at: new Date().toISOString()
-  }
+    const patch = {
+      status: 'converted',
+      stage: 'converted',
+      updated_at: new Date().toISOString()
+    }
 
     const { data, error } = await supa
       .from('prospects')
