@@ -118,19 +118,61 @@ export class LinkedInSmart {
     return out.filter(x => !seen.has(x.handle) && seen.add(x.handle))
   }
 
-  async connectNoNote(handle) {
+  async _prepareProfile(handle) {
     await this.init()
-    const h = String(handle || '').replace(/^@/,'')
+    const h = String(handle || '').replace(/^@/, '')
+    if (!h) throw new Error('missing_handle')
     await this.page.goto(`https://www.linkedin.com/in/${encodeURIComponent(h)}/`, { waitUntil: 'domcontentloaded' })
     await wait(900)
+
+    const alreadyMessage = await this.page.locator('button:has-text("Message")').count().catch(() => 0)
+    const pending = await this.page.locator('button:has-text("Pending")').count().catch(() => 0)
+    if (alreadyMessage > 0 && pending === 0) {
+      return { status: 'already_connected' }
+    }
+    if (pending > 0) {
+      return { status: 'pending' }
+    }
+
     const btn = this.page.locator('button:has-text("Connect")').first()
     if (!(await btn.count())) throw new Error('connect_button_not_found')
-    await btn.click().catch(()=>{})
+    await btn.click().catch(() => {})
     await wait(400)
+    return { status: 'prompt_open' }
+  }
+
+  async connectWithOptionalNote(handle, note) {
+    const state = await this._prepareProfile(handle)
+    if (state.status === 'already_connected' || state.status === 'pending') {
+      return { ok: true, status: state.status, requestId: null }
+    }
+
+    const trimmed = String(note || '').trim()
+    if (trimmed) {
+      const addNote = this.page.locator('button:has-text("Add a note")').first()
+      if (!(await addNote.count())) throw new Error('add_note_button_not_found')
+      await addNote.click().catch(() => {})
+      await wait(400)
+
+      const textarea = this.page.locator('textarea[name="message"], textarea#custom-message')
+      if (!(await textarea.count())) throw new Error('note_textarea_not_found')
+      await textarea.fill(trimmed)
+      await wait(200)
+
+      const send = this.page.locator('button:has-text("Send")').last()
+      await send.click().catch(() => {})
+      await wait(800)
+      return { ok: true, status: 'sent_with_note', requestId: `li_conn_${Date.now()}` }
+    }
+
     const send = this.page.locator('button:has-text("Send")').last()
-    await send.click().catch(()=>{})
+    await send.click().catch(() => {})
     await wait(800)
-    return { ok: true }
+    return { ok: true, status: 'sent', requestId: `li_conn_${Date.now()}` }
+  }
+
+  async connectNoNote(handle) {
+    return this.connectWithOptionalNote(handle, '')
   }
 
   async isConnected(handle) {

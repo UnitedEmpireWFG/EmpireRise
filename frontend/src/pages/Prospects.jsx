@@ -61,7 +61,11 @@ export default function Prospects() {
     const url = viewDnc ? "/api/prospects/list/dnc" : "/api/prospects"
     apiFetch(url)
       .then(data => {
-        const arr = Array.isArray(data) ? data : []
+        const arr = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.prospects)
+            ? data.prospects
+            : []
         setRows(arr)
         setErr("")
         setSelected({})
@@ -73,15 +77,18 @@ export default function Prospects() {
 
   const add = async () => {
     try {
-      await apiFetch("/api/prospects", {
+      const resp = await apiFetch("/api/prospects", {
         method: "POST",
         body: JSON.stringify({ name, handle, platform, note })
       })
+      if (resp?.error) throw new Error(resp.error)
       setName("")
       setHandle("")
       setNote("")
       load()
-    } catch {}
+    } catch (e) {
+      setErr(e?.message || "add_failed")
+    }
   }
 
   const toLead = async p => {
@@ -97,32 +104,41 @@ export default function Prospects() {
           source: "prospects"
         })
       })
-      await apiFetch(`/api/prospects/${p.id}`, {
+      const resp = await apiFetch(`/api/prospects/${p.id}`, {
         method: "PATCH",
         body: JSON.stringify({ status: "converted" })
       })
+      if (resp?.error) throw new Error(resp.error)
       load()
-    } catch {}
+    } catch (e) {
+      setErr(e?.message || "convert_failed")
+    }
   }
 
   const dnc = async p => {
     try {
-      await apiFetch(`/api/prospects/${p.id}/dnc`, {
+      const resp = await apiFetch(`/api/prospects/${p.id}/dnc`, {
         method: "POST",
         body: JSON.stringify({ reason: "manual" })
       })
+      if (resp?.error) throw new Error(resp.error)
       load()
-    } catch {}
+    } catch (e) {
+      setErr(e?.message || "dnc_failed")
+    }
   }
 
   const save = async (id, fields) => {
     try {
-      await apiFetch(`/api/prospects/${id}`, {
+      const resp = await apiFetch(`/api/prospects/${id}`, {
         method: "PATCH",
         body: JSON.stringify(fields)
       })
+      if (resp?.error) throw new Error(resp.error)
       load()
-    } catch {}
+    } catch (e) {
+      setErr(e?.message || "save_failed")
+    }
   }
 
   const toggle = id => {
@@ -151,12 +167,15 @@ export default function Prospects() {
     }))
     if (items.length === 0) return
     try {
-      await apiFetch("/api/growth/connect", {
+      const resp = await apiFetch("/api/growth/connect", {
         method: "POST",
         body: JSON.stringify({ items })
       })
+      if (resp?.error) throw new Error(resp.error)
       alert("Queued connection requests")
-    } catch {}
+    } catch (e) {
+      setErr(e?.message || "connect_failed")
+    }
   }
 
   const selectedRows = rows.filter(r => selected[r.id])
