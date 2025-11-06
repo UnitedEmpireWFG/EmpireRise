@@ -28,7 +28,7 @@ const DEFAULTS = {
 
 // Helper to read all settings into a plain object
 async function getAllSettings() {
-  const { data, error } = await supa.from("app_settings").select("key,value");
+  const { data, error } = await supa.from("app_settings_kv").select("key,value");
   if (error) throw new Error(error.message);
   const obj = {};
   for (const row of data || []) obj[row.key] = row.value;
@@ -59,7 +59,8 @@ r.post("/", async (req, res) => {
   try {
     const settings = req.body || {};
     const rows = Object.entries(settings).map(([key, value]) => ({ key, value }));
-    const { error } = await supa.from("app_settings").upsert(rows, { onConflict: "key" });
+    const payload = rows.map(r => ({ ...r, updated_at: new Date().toISOString() }));
+    const { error } = await supa.from("app_settings_kv").upsert(payload, { onConflict: "key" });
     if (error) throw new Error(error.message);
     res.json({ ok: true });
   } catch (e) {
@@ -77,7 +78,9 @@ r.post("/connected", async (req, res) => {
       return res.status(400).json({ ok:false, error: "invalid platform" });
     }
     const val = connected ? "true" : "false";
-    const { error } = await supa.from("app_settings").upsert([{ key, value: val }], { onConflict: "key" });
+    const { error } = await supa.from("app_settings_kv").upsert([
+      { key, value: val, updated_at: new Date().toISOString() }
+    ], { onConflict: "key" });
     if (error) throw new Error(error.message);
     res.json({ ok:true });
   } catch (e) {

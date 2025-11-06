@@ -27,10 +27,9 @@ export async function buildContext(contact, platform) {
 
   // settings for rates / caps (optional, helpful context)
   const { data: settingsRow } = await supa
-    .from('app_settings')
+    .from('app_config')
     .select('*')
-    .order('updated_at', { ascending: false })
-    .limit(1)
+    .eq('id', 1)
     .maybeSingle()
 
   // normalized contact profile

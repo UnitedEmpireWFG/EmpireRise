@@ -4,10 +4,22 @@ import { runSmartDriverOnce } from '../worker/smart_driver.js'
 
 const router = Router()
 
-router.post('/run', async (req, res) => {
+async function runOnce(res) {
+  const totals = await runSmartDriverOnce()
+  return res.json({ ok: true, ...totals })
+}
+
+router.post('/run', async (_req, res) => {
   try {
-    const totals = await runSmartDriverOnce()
-    res.json({ ok: true, ...totals })
+    await runOnce(res)
+  } catch (e) {
+    res.status(200).json({ ok: false, error: e.message })
+  }
+})
+
+router.post('/kick', async (_req, res) => {
+  try {
+    await runOnce(res)
   } catch (e) {
     res.status(200).json({ ok: false, error: e.message })
   }

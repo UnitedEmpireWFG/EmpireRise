@@ -4,11 +4,27 @@ import { supa } from '../../db.js'
 import { jitterMs, typePause } from '../pacing.js'
 
 export async function getIgConnectionForUser(userId) {
-  // Single-tenant example: pull from app_settings
-  const { data: set } = await supa.from('app_settings').select('*').limit(1)
-  const s = (set && set[0]) || {}
-  const igBusinessId = s.ig_business_id || null
-  const accessToken  = s.meta_page_token || s.meta_access_token || process.env.META_PAGE_TOKEN || null
+  const { data: userRow } = await supa
+    .from('app_settings')
+    .select('instagram_access_token, meta_access_token, meta_profile')
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  const { data: configRow } = await supa
+    .from('app_config')
+    .select('ig_business_id, meta_page_token, meta_access_token')
+    .eq('id', 1)
+    .maybeSingle()
+
+  const profile = userRow?.meta_profile || {}
+  const igBusinessId = profile?.instagram_business_id || configRow?.ig_business_id || null
+  const accessToken = userRow?.instagram_access_token
+    || userRow?.meta_access_token
+    || configRow?.meta_page_token
+    || configRow?.meta_access_token
+    || process.env.META_PAGE_TOKEN
+    || null
+
   return { igBusinessId, accessToken }
 }
 
