@@ -13,6 +13,9 @@ function sanitizeProspectRow(row = {}) {
     id: row.id,
     user_id: row.user_id,
     name: row.name,
+    headline: row.headline || null,
+    company: row.company || null,
+    location: row.location || null,
     handle: row.handle || row.li_handle || null,
     platform: row.platform || 'linkedin',
     status: row.status || row.stage || 'new',
@@ -21,6 +24,9 @@ function sanitizeProspectRow(row = {}) {
     dnc_reason: row.dnc_reason || null,
     note: row.note || null,
     profile_urls: row.profile_urls || row.links || null,
+    public_id: row.public_id || null,
+    li_profile_id: row.li_profile_id || null,
+    score: typeof row.score === 'number' ? row.score : row.score ? Number(row.score) || null : null,
     source: row.source || null,
     created_at: row.created_at,
     updated_at: row.updated_at
@@ -157,8 +163,9 @@ async function fetchProspects({ userId, limit = 50, includeDnc = false }) {
   const query = supa
     .from('prospects')
     .select(`
-      id, user_id, name, handle, li_handle, platform, status, stage, dnc,
-      dnc_reason, note, profile_urls, links, source, created_at, updated_at
+      id, user_id, name, headline, company, location, handle, li_handle,
+      platform, status, stage, dnc, dnc_reason, note, profile_urls, links,
+      public_id, li_profile_id, score, source, created_at, updated_at
     `)
     .eq('user_id', userId)
     .order('updated_at', { ascending: false })
