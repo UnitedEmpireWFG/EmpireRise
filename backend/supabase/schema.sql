@@ -36,6 +36,18 @@ create table if not exists leads (
   notes text
 );
 
+alter table if exists leads add column if not exists profile_url text;
+alter table if exists leads add column if not exists username text;
+alter table if exists leads add column if not exists city text;
+alter table if exists leads add column if not exists province text;
+alter table if exists leads add column if not exists country text default 'Canada';
+alter table if exists leads add column if not exists tags text[];
+alter table if exists leads add column if not exists type text;
+alter table if exists leads add column if not exists quality int default 0;
+alter table if exists leads add column if not exists do_not_contact boolean default false;
+alter table if exists leads add column if not exists last_declined_at timestamptz;
+alter table if exists leads add column if not exists notes text;
+
 create table if not exists messages (
   id uuid primary key default gen_random_uuid(),
   lead_id uuid references leads(id) on delete cascade,
