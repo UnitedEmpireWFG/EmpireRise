@@ -64,7 +64,7 @@ create table if not exists public.li_batch_prefs (
 create table if not exists public.li_contacts_stage (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null,
-  fingerprint text not null,
+  fingerprint text,
   public_id text,
   profile_url text,
   name text,
@@ -76,7 +76,8 @@ create table if not exists public.li_contacts_stage (
   created_at timestamptz default now(),
   processed_at timestamptz
 );
-create unique index if not exists li_contacts_stage_user_fp_idx on public.li_contacts_stage(user_id, fingerprint);
+alter table if exists public.li_contacts_stage add column if not exists fingerprint text;
+create unique index if not exists li_contacts_stage_user_fp_idx on public.li_contacts_stage(user_id, fingerprint) where fingerprint is not null;
 create index if not exists li_contacts_stage_user_created_idx on public.li_contacts_stage(user_id, created_at);
 
 -- Prospects captured by SmartDriver + staging loop --------------------------------
@@ -115,19 +116,39 @@ create table if not exists public.leads (
   prospect_id uuid references public.prospects(id) on delete set null,
   platform text,
   handle text,
+  profile_url text,
   username text,
   first_name text,
   last_name text,
   headline text,
   bio text,
   location text,
+  city text,
+  province text,
+  country text default 'Canada',
+  tags text[],
+  type text,
   open_to_work boolean,
   mutuals int,
   score int,
+  quality int default 0,
   status text default 'new',
+  do_not_contact boolean default false,
+  last_declined_at timestamptz,
+  notes text,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
+alter table if exists public.leads add column if not exists profile_url text;
+alter table if exists public.leads add column if not exists city text;
+alter table if exists public.leads add column if not exists province text;
+alter table if exists public.leads add column if not exists country text default 'Canada';
+alter table if exists public.leads add column if not exists tags text[];
+alter table if exists public.leads add column if not exists type text;
+alter table if exists public.leads add column if not exists quality int default 0;
+alter table if exists public.leads add column if not exists do_not_contact boolean default false;
+alter table if exists public.leads add column if not exists last_declined_at timestamptz;
+alter table if exists public.leads add column if not exists notes text;
 create unique index if not exists leads_user_prospect_idx on public.leads(user_id, prospect_id) where prospect_id is not null;
 create index if not exists leads_user_status_idx on public.leads(user_id, status);
 
