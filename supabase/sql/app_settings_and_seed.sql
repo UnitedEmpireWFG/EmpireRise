@@ -40,18 +40,12 @@ begin
         and table_name = 'app_settings'
         and column_name = 'status'
     ) then
-      execute $$
-        update public.app_settings
-        set status = 'active'
-        where status is null
-      $$;
+      execute 'update public.app_settings set status = ''active'' where status is null';
 
-      execute $$
-        alter table public.app_settings alter column status set default 'active'
-      $$;
+      execute 'alter table public.app_settings alter column status set default ''active''';
     end if;
   end if;
-end $$;
+end $$ language plpgsql;
 
 -- Global configuration + pacing ------------------------------------------------
 create table if not exists public.app_config (
