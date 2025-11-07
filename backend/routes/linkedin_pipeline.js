@@ -101,6 +101,22 @@ router.get('/', async (_req, res) => {
 })
 
 function normalizeTimestamps(row = {}) {
+  const createdAt =
+    row.created_at ||
+    row.inserted_at ||
+    row.createdat ||
+    row.insertedat ||
+    row.createdAt ||
+    row.insertedAt ||
+    null
+  const updatedAt =
+    row.updated_at ||
+    row.modified_at ||
+    row.updatedat ||
+    row.updatedAt ||
+    row.inserted_at ||
+    row.insertedat ||
+    createdAt
   const createdAt = row.created_at || row.inserted_at || row.createdat || row.insertedat || row.createdAt || row.insertedAt || null
   const updatedAt = row.updated_at || row.modified_at || row.updatedat || row.updatedAt || row.inserted_at || row.insertedat || createdAt
   return {
