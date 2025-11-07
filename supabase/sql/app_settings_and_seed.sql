@@ -144,7 +144,30 @@ create table if not exists public.leads (
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
-alter table if exists public.leads add column if not exists prospect_id uuid references public.prospects(id) on delete set null;
+do $$
+begin
+  if not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'leads'
+      and column_name = 'prospect_id'
+  ) then
+    if exists (
+      select 1
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'prospects'
+        and column_name = 'id'
+        and udt_name = 'uuid'
+    ) then
+      execute 'alter table public.leads add column prospect_id uuid references public.prospects(id) on delete set null';
+    else
+      execute 'alter table public.leads add column prospect_id integer';
+    end if;
+  end if;
+end
+$$;
 alter table if exists public.leads add column if not exists status text default 'new';
 alter table if exists public.leads add column if not exists profile_url text;
 alter table if exists public.leads add column if not exists username text;
@@ -172,7 +195,30 @@ create table if not exists public.drafts (
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
-alter table if exists public.drafts add column if not exists prospect_id uuid references public.prospects(id) on delete cascade;
+do $$
+begin
+  if not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'drafts'
+      and column_name = 'prospect_id'
+  ) then
+    if exists (
+      select 1
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'prospects'
+        and column_name = 'id'
+        and udt_name = 'uuid'
+    ) then
+      execute 'alter table public.drafts add column prospect_id uuid references public.prospects(id) on delete cascade';
+    else
+      execute 'alter table public.drafts add column prospect_id integer';
+    end if;
+  end if;
+end
+$$;
 alter table if exists public.drafts add column if not exists status text default 'draft';
 create index if not exists drafts_user_idx on public.drafts(user_id);
 create index if not exists drafts_user_prospect_idx on public.drafts(user_id, prospect_id);
@@ -209,7 +255,30 @@ create table if not exists public.queue (
   updated_at timestamptz default now(),
   error text
 );
-alter table if exists public.queue add column if not exists prospect_id uuid references public.prospects(id) on delete set null;
+do $$
+begin
+  if not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'queue'
+      and column_name = 'prospect_id'
+  ) then
+    if exists (
+      select 1
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'prospects'
+        and column_name = 'id'
+        and udt_name = 'uuid'
+    ) then
+      execute 'alter table public.queue add column prospect_id uuid references public.prospects(id) on delete set null';
+    else
+      execute 'alter table public.queue add column prospect_id integer';
+    end if;
+  end if;
+end
+$$;
 alter table if exists public.queue add column if not exists status text default 'draft';
 create index if not exists queue_user_status_idx on public.queue(user_id, status);
 create index if not exists queue_user_sched_idx on public.queue(user_id, scheduled_at);
