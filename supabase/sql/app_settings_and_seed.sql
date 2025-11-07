@@ -15,7 +15,70 @@ create table if not exists public.app_settings (
   last_li_seed_at timestamptz
 );
 
+alter table if exists public.app_settings add column if not exists user_id uuid;
 alter table if exists public.app_settings add column if not exists status text default 'active';
+
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'app_settings'
+      and column_name = 'id'
+  ) then
+    update public.app_settings set user_id = id where user_id is null;
+  end if;
+end $$;
+
+do $$
+declare
+  pk_name text;
+  pk_cols text;
+begin
+  select conname,
+         string_agg(att.attname, ',' order by cols.ord) as cols
+  into pk_name, pk_cols
+  from pg_constraint con
+  join unnest(con.conkey) with ordinality as cols(attnum, ord) on true
+  join pg_attribute att
+    on att.attrelid = con.conrelid
+   and att.attnum = cols.attnum
+  where con.conrelid = 'public.app_settings'::regclass
+    and con.contype = 'p'
+  group by conname;
+
+  if pk_name is not null and pk_cols <> 'user_id' then
+    execute format('alter table public.app_settings drop constraint %I', pk_name);
+  end if;
+end $$;
+
+do $$
+begin
+  if exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'app_settings' and column_name = 'user_id') then
+    if not exists (select 1 from public.app_settings where user_id is null) then
+      alter table public.app_settings alter column user_id set not null;
+    end if;
+  end if;
+end $$;
+
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'app_settings'
+      and column_name = 'user_id'
+  ) and not exists (
+    select 1
+    from pg_constraint
+    where conrelid = 'public.app_settings'::regclass
+      and contype = 'p'
+  ) then
+    alter table public.app_settings add primary key (user_id);
+  end if;
+end $$;
 
 -- Global configuration + pacing ------------------------------------------------
 create table if not exists public.app_config (
