@@ -3,6 +3,7 @@ create extension if not exists pgcrypto;
 -- Application + OAuth settings -------------------------------------------------
 create table if not exists public.app_settings (
   user_id uuid primary key,
+  status text default 'active',
   linkedin_access_token text,
   linkedin_expires_at timestamptz,
   linkedin_user_id text,
@@ -13,6 +14,10 @@ create table if not exists public.app_settings (
   li_needs_seed boolean default false,
   last_li_seed_at timestamptz
 );
+
+alter table if exists public.app_settings add column if not exists status text;
+update public.app_settings set status = 'active' where status is null;
+alter table if exists public.app_settings alter column status set default 'active';
 
 -- Global configuration + pacing ------------------------------------------------
 create table if not exists public.app_config (
