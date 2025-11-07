@@ -36,6 +36,8 @@ create table if not exists leads (
   notes text
 );
 
+alter table if exists leads add column if not exists profile_url text;
+alter table if exists leads add column if not exists username text;
 alter table if exists leads add column if not exists city text;
 alter table if exists leads add column if not exists province text;
 alter table if exists leads add column if not exists country text default 'Canada';

@@ -103,6 +103,8 @@ create table if not exists public.prospects (
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
+alter table if exists public.prospects add column if not exists profile_url text;
+alter table if exists public.prospects add column if not exists li_handle text;
 create index if not exists prospects_user_idx on public.prospects(user_id);
 create index if not exists prospects_user_stage_idx on public.prospects(user_id, stage);
 create unique index if not exists prospects_user_public_idx on public.prospects(user_id, public_id) where public_id is not null;
@@ -140,6 +142,7 @@ create table if not exists public.leads (
   updated_at timestamptz default now()
 );
 alter table if exists public.leads add column if not exists profile_url text;
+alter table if exists public.leads add column if not exists username text;
 alter table if exists public.leads add column if not exists city text;
 alter table if exists public.leads add column if not exists province text;
 alter table if exists public.leads add column if not exists country text default 'Canada';
