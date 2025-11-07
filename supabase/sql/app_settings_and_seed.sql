@@ -180,6 +180,63 @@ create table if not exists public.queue (
 create index if not exists queue_user_status_idx on public.queue(user_id, status);
 create index if not exists queue_user_sched_idx on public.queue(user_id, scheduled_at);
 
+-- Outreach + connect pipeline ----------------------------------------------------
+create table if not exists public.candidates (
+  id uuid primary key default gen_random_uuid(),
+  platform text default 'linkedin',
+  handle text,
+  first_name text,
+  last_name text,
+  headline text,
+  location text,
+  bio text,
+  open_to_work boolean default false,
+  mutuals int default 0,
+  status text default 'new',
+  next_action text,
+  note text,
+  last_error text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+alter table public.candidates add column if not exists created_at timestamptz default now();
+alter table public.candidates add column if not exists updated_at timestamptz default now();
+create unique index if not exists candidates_platform_handle_idx on public.candidates(platform, handle) where handle is not null;
+create index if not exists candidates_status_idx on public.candidates(status);
+
+create table if not exists public.connect_queue (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid,
+  platform text default 'linkedin',
+  handle text,
+  profile_url text,
+  note text,
+  status text default 'queued',
+  scheduled_at timestamptz,
+  sent_at timestamptz,
+  error text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+alter table public.connect_queue add column if not exists created_at timestamptz default now();
+alter table public.connect_queue add column if not exists updated_at timestamptz default now();
+create index if not exists connect_queue_status_idx on public.connect_queue(status);
+create index if not exists connect_queue_platform_idx on public.connect_queue(platform);
+
+create table if not exists public.connect_log (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid,
+  platform text default 'linkedin',
+  handle text,
+  action text,
+  ok boolean,
+  error text,
+  meta jsonb default '{}'::jsonb,
+  created_at timestamptz default now()
+);
+alter table public.connect_log add column if not exists created_at timestamptz default now();
+create index if not exists connect_log_platform_created_idx on public.connect_log(platform, created_at desc);
+
 -- Helper trigger to bump updated_at ---------------------------------------------
 create or replace function public.set_updated_at()
 returns trigger
@@ -209,6 +266,14 @@ create trigger trg_approvals_updated
 
 create trigger trg_queue_updated
   before update on public.queue
+  for each row execute function public.set_updated_at();
+
+create trigger trg_candidates_updated
+  before update on public.candidates
+  for each row execute function public.set_updated_at();
+
+create trigger trg_connect_queue_updated
+  before update on public.connect_queue
   for each row execute function public.set_updated_at();
 
 create trigger trg_app_settings_kv_updated
@@ -268,6 +333,9 @@ alter table public.leads enable row level security;
 alter table public.drafts enable row level security;
 alter table public.approvals enable row level security;
 alter table public.queue enable row level security;
+alter table public.candidates enable row level security;
+alter table public.connect_queue enable row level security;
+alter table public.connect_log enable row level security;
 
 do $$
 begin
@@ -300,6 +368,15 @@ begin
   end if;
   if not exists (select 1 from pg_policies where polname = 'queue_all_rw') then
     create policy queue_all_rw on public.queue for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where polname = 'candidates_all_rw') then
+    create policy candidates_all_rw on public.candidates for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where polname = 'connect_queue_all_rw') then
+    create policy connect_queue_all_rw on public.connect_queue for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where polname = 'connect_log_all_rw') then
+    create policy connect_log_all_rw on public.connect_log for all using (true) with check (true);
   end if;
 end
 $$;
