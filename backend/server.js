@@ -25,6 +25,7 @@ import meta from './routes/meta.js'
 import importMeta from './routes/import_meta.js'
 import linkedinPost from './routes/linkedin_post.js'
 import importLinkedIn from './routes/import_linkedin.js'
+import linkedinPipelineRouter from './routes/linkedin_pipeline.js'
 
 /* ===== App features (PROTECTED) ===== */
 import messagesRoutes from './routes/messages.js'
@@ -178,6 +179,7 @@ app.use('/api', requireAuth)
 app.use('/api/meta', metaIds)
 app.use('/api/meta', meta)
 app.use('/api/import/meta', importMeta)
+app.use('/api/linkedin/pipeline', linkedinPipelineRouter)
 app.use('/api/linkedin', linkedinPost)
 
 // Original mount
