@@ -144,6 +144,8 @@ create table if not exists public.leads (
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
+alter table if exists public.leads add column if not exists prospect_id uuid references public.prospects(id) on delete set null;
+alter table if exists public.leads add column if not exists status text default 'new';
 alter table if exists public.leads add column if not exists profile_url text;
 alter table if exists public.leads add column if not exists username text;
 alter table if exists public.leads add column if not exists city text;
@@ -170,6 +172,8 @@ create table if not exists public.drafts (
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
+alter table if exists public.drafts add column if not exists prospect_id uuid references public.prospects(id) on delete cascade;
+alter table if exists public.drafts add column if not exists status text default 'draft';
 create index if not exists drafts_user_idx on public.drafts(user_id);
 create index if not exists drafts_user_prospect_idx on public.drafts(user_id, prospect_id);
 
@@ -186,6 +190,7 @@ create table if not exists public.approvals (
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
+alter table if exists public.approvals add column if not exists status text default 'pending';
 create index if not exists approvals_user_status_idx on public.approvals(user_id, status);
 
 -- Queue of scheduled messages ---------------------------------------------------
@@ -204,6 +209,8 @@ create table if not exists public.queue (
   updated_at timestamptz default now(),
   error text
 );
+alter table if exists public.queue add column if not exists prospect_id uuid references public.prospects(id) on delete set null;
+alter table if exists public.queue add column if not exists status text default 'draft';
 create index if not exists queue_user_status_idx on public.queue(user_id, status);
 create index if not exists queue_user_sched_idx on public.queue(user_id, scheduled_at);
 
@@ -226,6 +233,7 @@ create table if not exists public.candidates (
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
+alter table if exists public.candidates add column if not exists status text default 'new';
 alter table public.candidates add column if not exists created_at timestamptz default now();
 alter table public.candidates add column if not exists updated_at timestamptz default now();
 create unique index if not exists candidates_platform_handle_idx on public.candidates(platform, handle) where handle is not null;
@@ -245,6 +253,7 @@ create table if not exists public.connect_queue (
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
+alter table if exists public.connect_queue add column if not exists status text default 'queued';
 alter table public.connect_queue add column if not exists created_at timestamptz default now();
 alter table public.connect_queue add column if not exists updated_at timestamptz default now();
 create index if not exists connect_queue_status_idx on public.connect_queue(status);
