@@ -46,6 +46,7 @@ begin
     end if;
   end if;
 end $$ language plpgsql;
+alter table if exists public.app_settings add column if not exists status text default 'active';
 
 -- Global configuration + pacing ------------------------------------------------
 create table if not exists public.app_config (
