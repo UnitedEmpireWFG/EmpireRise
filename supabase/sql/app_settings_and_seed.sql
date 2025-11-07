@@ -15,9 +15,31 @@ create table if not exists public.app_settings (
   last_li_seed_at timestamptz
 );
 
-alter table if exists public.app_settings add column if not exists status text;
-update public.app_settings set status = 'active' where status is null;
-alter table if exists public.app_settings alter column status set default 'active';
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.tables
+    where table_schema = 'public'
+      and table_name = 'app_settings'
+  ) then
+    if not exists (
+      select 1
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'app_settings'
+        and column_name = 'status'
+    ) then
+      alter table public.app_settings add column status text;
+    end if;
+
+    update public.app_settings
+    set status = 'active'
+    where status is null;
+
+    alter table public.app_settings alter column status set default 'active';
+  end if;
+end $$;
 
 -- Global configuration + pacing ------------------------------------------------
 create table if not exists public.app_config (
