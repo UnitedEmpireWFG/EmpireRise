@@ -15,6 +15,25 @@ create table if not exists public.app_settings (
   last_li_seed_at timestamptz
 );
 
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'app_settings'
+      and column_name = 'id'
+  ) and not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'app_settings'
+      and column_name = 'user_id'
+  ) then
+    alter table public.app_settings rename column id to user_id;
+  end if;
+end $$;
+
 alter table if exists public.app_settings add column if not exists user_id uuid;
 alter table if exists public.app_settings add column if not exists status text default 'active';
 
@@ -26,6 +45,12 @@ begin
     where table_schema = 'public'
       and table_name = 'app_settings'
       and column_name = 'id'
+  ) and exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'app_settings'
+      and column_name = 'user_id'
   ) then
     update public.app_settings set user_id = id where user_id is null;
   end if;
