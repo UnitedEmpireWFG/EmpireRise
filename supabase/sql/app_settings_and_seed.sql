@@ -15,93 +15,81 @@ create table if not exists public.app_settings (
   last_li_seed_at timestamptz
 );
 
-do $$
-begin
-  if exists (
-    select 1
-    from information_schema.columns
-    where table_schema = 'public'
-      and table_name = 'app_settings'
-      and column_name = 'id'
-  ) and not exists (
-    select 1
-    from information_schema.columns
-    where table_schema = 'public'
-      and table_name = 'app_settings'
-      and column_name = 'user_id'
-  ) then
-    alter table public.app_settings rename column id to user_id;
-  end if;
-end $$;
-
-alter table if exists public.app_settings add column if not exists user_id uuid;
 alter table if exists public.app_settings add column if not exists status text default 'active';
 
 do $$
-begin
-  if exists (
-    select 1
-    from information_schema.columns
-    where table_schema = 'public'
-      and table_name = 'app_settings'
-      and column_name = 'id'
-  ) and exists (
-    select 1
-    from information_schema.columns
-    where table_schema = 'public'
-      and table_name = 'app_settings'
-      and column_name = 'user_id'
-  ) then
-    update public.app_settings set user_id = id where user_id is null;
-  end if;
-end $$;
-
-do $$
 declare
+  has_user_id boolean;
+  has_id boolean;
   pk_name text;
   pk_cols text;
+  null_count bigint;
 begin
+  select exists (
+           select 1
+           from information_schema.columns
+           where table_schema = 'public'
+             and table_name = 'app_settings'
+             and column_name = 'user_id'
+         ),
+         exists (
+           select 1
+           from information_schema.columns
+           where table_schema = 'public'
+             and table_name = 'app_settings'
+             and column_name = 'id'
+         )
+    into has_user_id, has_id;
+
+  if not has_user_id then
+    if has_id then
+      alter table public.app_settings rename column id to user_id;
+      has_user_id := true;
+      has_id := false;
+    else
+      alter table public.app_settings add column user_id uuid;
+      has_user_id := true;
+    end if;
+  end if;
+
+  if has_user_id and has_id then
+    update public.app_settings set user_id = id where user_id is null;
+  end if;
+
   select conname,
          string_agg(att.attname, ',' order by cols.ord) as cols
-  into pk_name, pk_cols
-  from pg_constraint con
-  join unnest(con.conkey) with ordinality as cols(attnum, ord) on true
-  join pg_attribute att
-    on att.attrelid = con.conrelid
-   and att.attnum = cols.attnum
-  where con.conrelid = 'public.app_settings'::regclass
-    and con.contype = 'p'
-  group by conname;
+    into pk_name, pk_cols
+    from pg_constraint con
+    join unnest(con.conkey) with ordinality as cols(attnum, ord) on true
+    join pg_attribute att
+      on att.attrelid = con.conrelid
+     and att.attnum = cols.attnum
+    where con.conrelid = 'public.app_settings'::regclass
+      and con.contype = 'p'
+    group by conname;
 
   if pk_name is not null and pk_cols <> 'user_id' then
     execute format('alter table public.app_settings drop constraint %I', pk_name);
   end if;
-end $$;
 
-do $$
-begin
-  if exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'app_settings' and column_name = 'user_id') then
-    if not exists (select 1 from public.app_settings where user_id is null) then
+  if has_user_id then
+    select count(*)
+      into null_count
+      from public.app_settings
+      where user_id is null;
+
+    if null_count = 0 then
       alter table public.app_settings alter column user_id set not null;
     end if;
-  end if;
-end $$;
 
-do $$
-begin
-  if exists (
-    select 1
-    from information_schema.columns
-    where table_schema = 'public'
-      and table_name = 'app_settings'
-      and column_name = 'user_id'
-  ) and not exists (
-    select 1
-    from pg_constraint
-    where conrelid = 'public.app_settings'::regclass
-      and contype = 'p'
-  ) then
-    alter table public.app_settings add primary key (user_id);
+    if not exists (
+      select 1
+      from pg_constraint
+      where conrelid = 'public.app_settings'::regclass
+        and contype = 'p'
+    ) then
+      alter table public.app_settings add primary key (user_id);
+    end if;
   end if;
 end $$;
 
