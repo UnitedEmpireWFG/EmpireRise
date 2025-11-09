@@ -30,7 +30,7 @@ async function pullProspects({ userId }) {
   // Prefer the RPC (which handles row locking + processed_at) but gracefully
   // fall back to manual queries if the RPC is unavailable or misconfigured.
 
-  let staged = null
+  let staged = []
 
   const { data: rpcRows, error: rpcError } = await supa
     .rpc('li_stage_for_user', { p_user_id: userId, p_limit: BATCH })
@@ -63,26 +63,7 @@ async function pullProspects({ userId }) {
     }
   }
 
-  // Pull staged LI contacts not yet in prospects
-  // We’ll match on public_id if present, else on profile_url
-  const { data: staged, error: eStage } = await supa
-    .from('li_contacts_stage')
-    .select('id,user_id,name,headline,company,title,region,public_id,profile_url,created_at')
-    .eq('user_id', userId)
-    .is('processed_at', null)
-    .order('created_at', { ascending: true })
-    .limit(BATCH)
-  if (eStage) throw new Error('pullProspects.stage_error ' + eStage.message)
   if (!staged?.length) return { pulled: 0 }
-
-  const ids = staged.map(row => row.id).filter(Boolean)
-  if (ids.length) {
-    const { error: eMark } = await supa
-      .from('li_contacts_stage')
-      .update({ processed_at: nowIso() })
-      .in('id', ids)
-    if (eMark) throw new Error('pullProspects.mark_error ' + eMark.message)
-  }
 
   let pulled = 0
   for (const c of staged) {
