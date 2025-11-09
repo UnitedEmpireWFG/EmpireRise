@@ -26,6 +26,43 @@ async function getActiveUsers() {
 }
 
 async function pullProspects({ userId }) {
+  // Pull staged LI contacts not yet in prospects.
+  // Prefer the RPC (which handles row locking + processed_at) but gracefully
+  // fall back to manual queries if the RPC is unavailable or misconfigured.
+
+  let staged = null
+
+  const { data: rpcRows, error: rpcError } = await supa
+    .rpc('li_stage_for_user', { p_user_id: userId, p_limit: BATCH })
+
+  if (!rpcError) {
+    staged = rpcRows || []
+  } else {
+    const msg = rpcError.message || ''
+    // If the RPC exists but is misconfigured we still want to proceed.
+    console.warn('smart_driver:pullProspects rpc_error', msg)
+
+    const { data, error: fallbackError } = await supa
+      .from('li_contacts_stage')
+      .select('id,user_id,name,headline,company,title,region,public_id,profile_url,created_at')
+      .eq('user_id', userId)
+      .is('processed_at', null)
+      .order('created_at', { ascending: true })
+      .limit(BATCH)
+
+    if (fallbackError) throw new Error('pullProspects.stage_error ' + fallbackError.message)
+    staged = data || []
+
+    const ids = staged.map(row => row.id).filter(Boolean)
+    if (ids.length) {
+      const { error: markError } = await supa
+        .from('li_contacts_stage')
+        .update({ processed_at: nowIso() })
+        .in('id', ids)
+      if (markError) throw new Error('pullProspects.mark_error ' + markError.message)
+    }
+  }
+
   // Pull staged LI contacts not yet in prospects
   // We’ll match on public_id if present, else on profile_url
   const { data: staged, error: eStage } = await supa
@@ -114,19 +151,52 @@ async function scoreLeads({ userId }) {
       .maybeSingle()
 
     if (leadRow?.id) {
-      await supa.from('leads').update({ score, updated_at: nowIso() }).eq('id', leadRow.id)
+      await upsertLead({
+        type: 'update',
+        match: { id: leadRow.id },
+        payload: { score, quality: score, updated_at: nowIso() }
+      })
     } else {
-      await supa.from('leads').insert({
-        user_id: userId,
-        prospect_id: p.id,
-        score,
-        status: 'new',
-        created_at: nowIso()
+      await upsertLead({
+        type: 'insert',
+        payload: {
+          user_id: userId,
+          prospect_id: p.id,
+          score,
+          quality: score,
+          status: 'new',
+          created_at: nowIso()
+        }
       })
     }
     scored++
   }
   return { scored }
+}
+
+async function upsertLead({ type, match = {}, payload }) {
+  const exec = async values => {
+    if (type === 'update') {
+      let query = supa.from('leads').update(values)
+      for (const [key, value] of Object.entries(match || {})) query = query.eq(key, value)
+      return query
+    }
+    return supa.from('leads').insert(values)
+  }
+
+  const attempt = await exec(payload)
+  if (!attempt.error) return attempt
+
+  const message = attempt.error.message || ''
+  if (message.toLowerCase().includes('column') && message.toLowerCase().includes('score')) {
+    const retryPayload = { ...payload }
+    delete retryPayload.score
+    const retry = await exec(retryPayload)
+    if (!retry.error) return retry
+    throw new Error('scoreLeads.upsert_error ' + retry.error.message)
+  }
+
+  throw new Error('scoreLeads.upsert_error ' + message)
 }
 
 function withinWorkWindow() {
@@ -137,9 +207,9 @@ async function generateDrafts({ userId }) {
   // find top fresh leads without a recent draft
   const { data: leads, error: eLeads } = await supa
     .from('leads')
-    .select('id,prospect_id,score')
+    .select('id,prospect_id,quality,updated_at')
     .eq('user_id', userId)
-    .order('score', { ascending: false })
+    .order('updated_at', { ascending: false })
     .limit(BATCH)
   if (eLeads) throw new Error('generateDrafts.leads_error ' + eLeads.message)
 
