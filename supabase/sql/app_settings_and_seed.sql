@@ -429,45 +429,89 @@ begin
 end;
 $$;
 
-create trigger trg_prospects_updated
-  before update on public.prospects
-  for each row execute function public.set_updated_at();
+do $$
+begin
+  if not exists (
+    select 1 from pg_trigger where tgname = 'trg_prospects_updated'
+  ) then
+    create trigger trg_prospects_updated
+      before update on public.prospects
+      for each row execute function public.set_updated_at();
+  end if;
 
-create trigger trg_leads_updated
-  before update on public.leads
-  for each row execute function public.set_updated_at();
+  if not exists (
+    select 1 from pg_trigger where tgname = 'trg_leads_updated'
+  ) then
+    create trigger trg_leads_updated
+      before update on public.leads
+      for each row execute function public.set_updated_at();
+  end if;
 
-create trigger trg_drafts_updated
-  before update on public.drafts
-  for each row execute function public.set_updated_at();
+  if not exists (
+    select 1 from pg_trigger where tgname = 'trg_drafts_updated'
+  ) then
+    create trigger trg_drafts_updated
+      before update on public.drafts
+      for each row execute function public.set_updated_at();
+  end if;
 
-create trigger trg_approvals_updated
-  before update on public.approvals
-  for each row execute function public.set_updated_at();
+  if not exists (
+    select 1 from pg_trigger where tgname = 'trg_approvals_updated'
+  ) then
+    create trigger trg_approvals_updated
+      before update on public.approvals
+      for each row execute function public.set_updated_at();
+  end if;
 
-create trigger trg_queue_updated
-  before update on public.queue
-  for each row execute function public.set_updated_at();
+  if not exists (
+    select 1 from pg_trigger where tgname = 'trg_queue_updated'
+  ) then
+    create trigger trg_queue_updated
+      before update on public.queue
+      for each row execute function public.set_updated_at();
+  end if;
 
-create trigger trg_candidates_updated
-  before update on public.candidates
-  for each row execute function public.set_updated_at();
+  if not exists (
+    select 1 from pg_trigger where tgname = 'trg_candidates_updated'
+  ) then
+    create trigger trg_candidates_updated
+      before update on public.candidates
+      for each row execute function public.set_updated_at();
+  end if;
 
-create trigger trg_connect_queue_updated
-  before update on public.connect_queue
-  for each row execute function public.set_updated_at();
+  if not exists (
+    select 1 from pg_trigger where tgname = 'trg_connect_queue_updated'
+  ) then
+    create trigger trg_connect_queue_updated
+      before update on public.connect_queue
+      for each row execute function public.set_updated_at();
+  end if;
 
-create trigger trg_app_settings_kv_updated
-  before update on public.app_settings_kv
-  for each row execute function public.set_updated_at();
+  if not exists (
+    select 1 from pg_trigger where tgname = 'trg_app_settings_kv_updated'
+  ) then
+    create trigger trg_app_settings_kv_updated
+      before update on public.app_settings_kv
+      for each row execute function public.set_updated_at();
+  end if;
 
-create trigger trg_app_config_updated
-  before update on public.app_config
-  for each row execute function public.set_updated_at();
+  if not exists (
+    select 1 from pg_trigger where tgname = 'trg_app_config_updated'
+  ) then
+    create trigger trg_app_config_updated
+      before update on public.app_config
+      for each row execute function public.set_updated_at();
+  end if;
 
-create trigger trg_li_batch_prefs_updated
-  before update on public.li_batch_prefs
-  for each row execute function public.set_updated_at();
+  if not exists (
+    select 1 from pg_trigger where tgname = 'trg_li_batch_prefs_updated'
+  ) then
+    create trigger trg_li_batch_prefs_updated
+      before update on public.li_batch_prefs
+      for each row execute function public.set_updated_at();
+  end if;
+end;
+$$;
 
 -- SmartDriver RPC: claim staged LinkedIn contacts -------------------------------
 drop function if exists public.li_stage_for_user(uuid, integer);
@@ -490,7 +534,7 @@ as $$
 begin
   return query
   with grabbed as (
-    select s.id
+    select s.id as stage_id
     from public.li_contacts_stage s
     where s.user_id = p_user_id
       and s.processed_at is null
@@ -500,7 +544,8 @@ begin
   )
   update public.li_contacts_stage s
      set processed_at = now()
-   where s.id in (select id from grabbed)
+    from grabbed g
+   where s.id = g.stage_id
   returning s.id, s.user_id, s.name, s.headline, s.company, s.title, s.region, s.public_id, s.profile_url, s.created_at;
 end;
 $$;
