@@ -490,7 +490,7 @@ as $$
 begin
   return query
   with grabbed as (
-    select s.id
+    select s.id as stage_id
     from public.li_contacts_stage s
     where s.user_id = p_user_id
       and s.processed_at is null
@@ -500,7 +500,8 @@ begin
   )
   update public.li_contacts_stage s
      set processed_at = now()
-   where s.id in (select id from grabbed)
+    from grabbed g
+   where s.id = g.stage_id
   returning s.id, s.user_id, s.name, s.headline, s.company, s.title, s.region, s.public_id, s.profile_url, s.created_at;
 end;
 $$;
