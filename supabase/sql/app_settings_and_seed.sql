@@ -156,6 +156,16 @@ create table if not exists public.li_contacts_stage (
   processed_at timestamptz
 );
 alter table if exists public.li_contacts_stage add column if not exists fingerprint text;
+alter table if exists public.li_contacts_stage add column if not exists public_id text;
+alter table if exists public.li_contacts_stage add column if not exists profile_url text;
+alter table if exists public.li_contacts_stage add column if not exists name text;
+alter table if exists public.li_contacts_stage add column if not exists headline text;
+alter table if exists public.li_contacts_stage add column if not exists company text;
+alter table if exists public.li_contacts_stage add column if not exists title text;
+alter table if exists public.li_contacts_stage add column if not exists region text;
+alter table if exists public.li_contacts_stage add column if not exists raw jsonb;
+alter table if exists public.li_contacts_stage add column if not exists created_at timestamptz default now();
+alter table if exists public.li_contacts_stage add column if not exists processed_at timestamptz;
 create unique index if not exists li_contacts_stage_user_fp_idx on public.li_contacts_stage(user_id, fingerprint) where fingerprint is not null;
 create index if not exists li_contacts_stage_user_created_idx on public.li_contacts_stage(user_id, created_at);
 
