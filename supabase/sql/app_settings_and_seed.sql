@@ -470,6 +470,8 @@ create trigger trg_li_batch_prefs_updated
   for each row execute function public.set_updated_at();
 
 -- SmartDriver RPC: claim staged LinkedIn contacts -------------------------------
+drop function if exists public.li_stage_for_user(uuid, integer);
+
 create or replace function public.li_stage_for_user(p_user_id uuid, p_limit int default 25)
 returns table (
   id uuid,
@@ -520,43 +522,43 @@ alter table public.connect_log enable row level security;
 
 do $$
 begin
-  if not exists (select 1 from pg_policies where polname = 'app_settings_all_rw') then
+  if not exists (select 1 from pg_policies where policyname = 'app_settings_all_rw') then
     create policy app_settings_all_rw on public.app_settings for all using (true) with check (true);
   end if;
-  if not exists (select 1 from pg_policies where polname = 'app_config_all_rw') then
+  if not exists (select 1 from pg_policies where policyname = 'app_config_all_rw') then
     create policy app_config_all_rw on public.app_config for all using (true) with check (true);
   end if;
-  if not exists (select 1 from pg_policies where polname = 'app_settings_kv_all_rw') then
+  if not exists (select 1 from pg_policies where policyname = 'app_settings_kv_all_rw') then
     create policy app_settings_kv_all_rw on public.app_settings_kv for all using (true) with check (true);
   end if;
-  if not exists (select 1 from pg_policies where polname = 'li_batch_prefs_all_rw') then
+  if not exists (select 1 from pg_policies where policyname = 'li_batch_prefs_all_rw') then
     create policy li_batch_prefs_all_rw on public.li_batch_prefs for all using (true) with check (true);
   end if;
-  if not exists (select 1 from pg_policies where polname = 'li_contacts_stage_all_rw') then
+  if not exists (select 1 from pg_policies where policyname = 'li_contacts_stage_all_rw') then
     create policy li_contacts_stage_all_rw on public.li_contacts_stage for all using (true) with check (true);
   end if;
-  if not exists (select 1 from pg_policies where polname = 'prospects_all_rw') then
+  if not exists (select 1 from pg_policies where policyname = 'prospects_all_rw') then
     create policy prospects_all_rw on public.prospects for all using (true) with check (true);
   end if;
-  if not exists (select 1 from pg_policies where polname = 'leads_all_rw') then
+  if not exists (select 1 from pg_policies where policyname = 'leads_all_rw') then
     create policy leads_all_rw on public.leads for all using (true) with check (true);
   end if;
-  if not exists (select 1 from pg_policies where polname = 'drafts_all_rw') then
+  if not exists (select 1 from pg_policies where policyname = 'drafts_all_rw') then
     create policy drafts_all_rw on public.drafts for all using (true) with check (true);
   end if;
-  if not exists (select 1 from pg_policies where polname = 'approvals_all_rw') then
+  if not exists (select 1 from pg_policies where policyname = 'approvals_all_rw') then
     create policy approvals_all_rw on public.approvals for all using (true) with check (true);
   end if;
-  if not exists (select 1 from pg_policies where polname = 'queue_all_rw') then
+  if not exists (select 1 from pg_policies where policyname = 'queue_all_rw') then
     create policy queue_all_rw on public.queue for all using (true) with check (true);
   end if;
-  if not exists (select 1 from pg_policies where polname = 'candidates_all_rw') then
+  if not exists (select 1 from pg_policies where policyname = 'candidates_all_rw') then
     create policy candidates_all_rw on public.candidates for all using (true) with check (true);
   end if;
-  if not exists (select 1 from pg_policies where polname = 'connect_queue_all_rw') then
+  if not exists (select 1 from pg_policies where policyname = 'connect_queue_all_rw') then
     create policy connect_queue_all_rw on public.connect_queue for all using (true) with check (true);
   end if;
-  if not exists (select 1 from pg_policies where polname = 'connect_log_all_rw') then
+  if not exists (select 1 from pg_policies where policyname = 'connect_log_all_rw') then
     create policy connect_log_all_rw on public.connect_log for all using (true) with check (true);
   end if;
 end
