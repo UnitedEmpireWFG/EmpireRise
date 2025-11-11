@@ -26,9 +26,11 @@
     "nodemon": "^3.1.10"
   },
   "scripts": {
-    "dev": "nodemon server.js",
-    "start": "node server.js",
+    "ensure:playwright": "node ./scripts/ensure-playwright.mjs",
+    "dev": "npm run ensure:playwright && nodemon server.js",
+    "start": "npm run ensure:playwright && node server.js",
     "pw:install": "npx playwright install chromium",
+    "postinstall": "npx playwright install chromium",
     "smoke:fe": "node ./smoke/smoke_frontend.mjs",
     "smoke:be": "node ./smoke/smoke_backend.mjs",
     "smoke:all": "npm run smoke:fe && npm run smoke:be"
