@@ -1,4 +1,6 @@
 import { chromium } from 'playwright'
+
+import { ensurePlaywrightChromium } from '../lib/ensure_playwright.js'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { normalize, looksCanadian, notInExcluded } from '../services/filters/smart_canada.js'
@@ -30,6 +32,7 @@ export class LinkedInSmart {
   }
 
   async launch() {
+    await ensurePlaywrightChromium()
     this.browser = await chromium.launch({ headless: !this.headful, slowMo: this.slowMo })
     this.context = await this.browser.newContext({ viewport: { width: 1420, height: 900 } })
     this.page = await this.context.newPage()
