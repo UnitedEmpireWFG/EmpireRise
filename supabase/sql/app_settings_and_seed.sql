@@ -296,7 +296,10 @@ alter table if exists public.leads add column if not exists workspace_id uuid;
 alter table if exists public.leads add column if not exists owner_id uuid;
 alter table if exists public.leads add column if not exists pipeline text;
 alter table if exists public.leads add column if not exists priority integer;
-create unique index if not exists leads_user_prospect_idx on public.leads(user_id, prospect_id) where prospect_id is not null;
+drop index if exists leads_user_prospect_idx;
+alter table if exists public.leads
+  add constraint leads_user_prospect_unique unique (user_id, prospect_id);
+create index if not exists leads_user_prospect_lookup_idx on public.leads(user_id, prospect_id);
 create index if not exists leads_user_status_idx on public.leads(user_id, status);
 create index if not exists leads_user_stage_idx on public.leads(user_id, stage);
 create index if not exists leads_user_track_idx on public.leads(user_id, track);
