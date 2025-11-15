@@ -11,7 +11,7 @@ const MAX_PAYLOAD = 2000
 
 let driverModule = null
 
-async function loadDriverModule() {
+export async function loadDriverModule() {
   if (driverModule) return driverModule
   try {
     driverModule = await import('../drivers/driver_linkedin_smart.js')
@@ -33,7 +33,7 @@ async function hasCookies(userId) {
   }
 }
 
-async function fetchViaDriver({ userId, limit, flavor }) {
+export async function fetchViaDriver({ userId, limit, flavor }) {
   if (!userId) return []
   if (!(await hasCookies(userId))) {
     console.log('li_import_no_cookies', userId)
@@ -69,13 +69,13 @@ function getUserId(req) {
   return req.user?.id || req.user?.sub || null
 }
 
-function toNull(value) {
+export function toNull(value) {
   if (value === undefined || value === null) return null
   const trimmed = String(value).trim()
   return trimmed.length ? trimmed : null
 }
 
-function normalizePublicId(value) {
+export function normalizePublicId(value) {
   const raw = toNull(value)
   if (!raw) return null
   const stripped = raw
@@ -84,7 +84,7 @@ function normalizePublicId(value) {
   return stripped.toLowerCase()
 }
 
-function normalizeProfileUrl(value, fallbackId) {
+export function normalizeProfileUrl(value, fallbackId) {
   const raw = toNull(value)
   if (raw && /^https?:\/\//i.test(raw)) return raw
   if (raw && raw.startsWith('linkedin.com')) return `https://${raw}`
@@ -97,7 +97,7 @@ function safeJson(value) {
   catch { return null }
 }
 
-function fingerprintFor(row) {
+export function fingerprintFor(row) {
   const direct = toNull(row.public_id || row.profile_url || row.handle || row.li_handle || row.external_id)
   if (direct) return direct.toLowerCase()
   const basis = [row.name, row.headline || row.title, row.company, row.region]
@@ -108,7 +108,7 @@ function fingerprintFor(row) {
   return createHash('sha1').update(basis).digest('hex')
 }
 
-function normalizeItem(raw) {
+export function normalizeItem(raw) {
   if (!raw || typeof raw !== 'object') return null
   const name = toNull(raw.name || raw.full_name || raw.displayName || `${raw.first_name || raw.firstName || ''} ${raw.last_name || raw.lastName || ''}`.trim())
   const publicId = normalizePublicId(raw.public_id || raw.li_profile_id || raw.vanity || raw.handle || raw.profile_id || raw.profileId || raw.id)
