@@ -157,12 +157,6 @@ async function installIfMissing() {
 
   await runPlaywrightInstall(preferredBrowsersPath)
 
-
-  const preferredBrowsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH
-    || join(__dirname, '..', 'node_modules', 'playwright', '.local-browsers')
-
-  await runPlaywrightInstall(preferredBrowsersPath)
-
   const installedPath = findLocalChromium()
   if (!installedPath) {
     throw new Error('playwright_chromium_missing_after_install')
