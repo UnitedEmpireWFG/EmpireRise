@@ -219,6 +219,100 @@ async function scoreLeads({ userId }) {
   return { scored }
 }
 
+async function upsertLead({ type, match = {}, payload }) {
+  if (type === 'update') {
+    let query = supa.from('leads').update(payload)
+    for (const [key, value] of Object.entries(match || {})) query = query.eq(key, value)
+    const attempt = await query
+    if (!attempt.error) return attempt
+    throw new Error('scoreLeads.upsert_error ' + (attempt.error.message || 'update_failed'))
+  }
+
+  const { user_id: userId, prospect_id: prospectId, created_at: createdAt, ...rest } = payload || {}
+  if (!userId || !prospectId) {
+    throw new Error('scoreLeads.upsert_error missing_user_or_prospect')
+  }
+
+  const now = nowIso()
+  const refreshPayload = { ...rest, updated_at: now }
+  const preflight = await supa
+    .from('leads')
+    .update(refreshPayload)
+    .eq('user_id', userId)
+    .eq('prospect_id', prospectId)
+    .select('id')
+
+  if (!preflight.error && Array.isArray(preflight.data) && preflight.data.length) {
+    return preflight
+  }
+
+  const upsertPayload = {
+    ...payload,
+    created_at: createdAt || now,
+    updated_at: now
+  }
+
+  const attempt = await supa
+    .from('leads')
+    .upsert(upsertPayload, { onConflict: 'user_id,prospect_id', ignoreDuplicates: false })
+  }
+
+  const now = nowIso()
+  const refreshPayload = { ...rest, updated_at: now }
+  const preflight = await supa
+    .from('leads')
+    .update(refreshPayload)
+    .eq('user_id', userId)
+    .eq('prospect_id', prospectId)
+    .select('id')
+
+  if (!preflight.error && Array.isArray(preflight.data) && preflight.data.length) {
+    return preflight
+  }
+
+  const insertPayload = { ...payload }
+  if (!insertPayload.created_at) insertPayload.created_at = createdAt || now
+  const attempt = await supa
+    .from('leads')
+    .insert(insertPayload)
+    .select('id')
+    .maybeSingle()
+
+  if (!attempt.error) return attempt
+
+  const message = attempt.error.message || ''
+
+  if (message.toLowerCase().includes('column') && message.toLowerCase().includes('score')) {
+    const retryPayload = { ...upsertPayload }
+    delete retryPayload.score
+    const retry = await supa
+      .from('leads')
+      .upsert(retryPayload, { onConflict: 'user_id,prospect_id', ignoreDuplicates: false })
+      .select('id')
+      .maybeSingle()
+  const lowered = message.toLowerCase()
+
+  if (lowered.includes('duplicate key value')) {
+    const retry = await supa
+      .from('leads')
+      .update(refreshPayload)
+      .eq('user_id', userId)
+      .eq('prospect_id', prospectId)
+    if (!retry.error) return retry
+    throw new Error('scoreLeads.upsert_error ' + (retry.error.message || 'duplicate_retry_failed'))
+  }
+
+  if (lowered.includes('column') && lowered.includes('score')) {
+    const retryPayload = { ...insertPayload }
+    delete retryPayload.score
+    const retry = await supa.from('leads').insert(retryPayload).select('id').maybeSingle()
+    if (!retry.error) return retry
+    throw new Error('scoreLeads.upsert_error ' + (retry.error.message || message))
+  }
+
+  throw new Error('scoreLeads.upsert_error ' + message)
+}
+
 function withinWorkWindow() {
   try { return timePolicy.isWithinWorkWindow() } catch { return true } // if policy not present, just run
 }
