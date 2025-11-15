@@ -125,13 +125,22 @@ async function scoreLeads({ userId }) {
     // upsert to leads
     const { data: leadRow } = await supa
       .from('leads')
-      .select('id')
+      .select('id,score,quality,updated_at')
       .eq('user_id', userId)
       .eq('prospect_id', p.id) // NOTE: your prospection schema should have leads.prospect_id (uuid) FK → prospects.id
       .limit(1)
       .maybeSingle()
 
     if (leadRow?.id) {
+      const lastTouched = leadRow.updated_at ? new Date(leadRow.updated_at).getTime() : 0
+      const isFresh =
+        leadRow.score === score &&
+        leadRow.quality === score &&
+        lastTouched &&
+        Date.now() - lastTouched < 6 * 60 * 60 * 1000 // < 6h old, skip churn
+
+      if (isFresh) continue
+
       await upsertLead({
         type: 'update',
         match: { id: leadRow.id },
@@ -169,7 +178,23 @@ async function upsertLead({ type, match = {}, payload }) {
   if (!attempt.error) return attempt
 
   const message = attempt.error.message || ''
-  if (message.toLowerCase().includes('column') && message.toLowerCase().includes('score')) {
+  const lowered = message.toLowerCase()
+
+  if (lowered.includes('duplicate key value') && type === 'insert') {
+    const { user_id: userId, prospect_id: prospectId, created_at: _created, ...rest } = payload || {}
+    if (userId && prospectId) {
+      const updatePayload = { ...rest, updated_at: nowIso() }
+      const retry = await supa
+        .from('leads')
+        .update(updatePayload)
+        .eq('user_id', userId)
+        .eq('prospect_id', prospectId)
+      if (!retry.error) return retry
+      throw new Error('scoreLeads.upsert_error ' + (retry.error.message || 'duplicate_upsert_failed'))
+    }
+  }
+
+  if (lowered.includes('column') && lowered.includes('score')) {
     const retryPayload = { ...payload }
     delete retryPayload.score
     const retry = await exec(retryPayload)
