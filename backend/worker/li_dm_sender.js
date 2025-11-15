@@ -2,6 +2,7 @@ import { supa } from '../db.js'
 import { LinkedInDriver } from '../services/linkedin_driver.js'
 import { timePolicy } from '../services/time_windows.js'
 import path from 'node:path'
+import { isSeriousLinkedInError, notifyOps } from '../utils/ops_alerts.js'
 
 const COOKIES_DIR = process.env.LI_COOKIES_DIR || '/opt/render/project/.data/li_cookies'
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
@@ -31,13 +32,18 @@ export async function tickLinkedInSender() {
   if (!timePolicy.canSendNow()) return
   try {
     const rows = await fetchNextBatch(15)
+    console.log(`[li_dm_sender] fetched ${rows.length} row(s)`) // include zero-length batches for visibility
     if (!rows.length) return
 
     const byUser = rows.reduce((m, r) => { (m[r.user_id] ||= []).push(r); return m }, {})
+    console.log(`[li_dm_sender] processing ${Object.keys(byUser).length} user(s)`)
 
     for (const [userId, items] of Object.entries(byUser)) {
       const cookiesPath = path.join(COOKIES_DIR, `${userId}.json`)
       const driver = new LinkedInDriver({ cookiesPath })
+      let sent = 0
+      let failed = 0
+      console.log(`[li_dm_sender] user ${userId}: processing ${items.length} queued message(s)`)
       try {
         await driver.init()
 
@@ -47,20 +53,61 @@ export async function tickLinkedInSender() {
             const contact = await getContact(row.contact_id)
             const handle = String(contact?.handle || '').trim().toLowerCase()
             const text = String(payload?.text || '').trim()
-            if (!handle || !text) { await markQueue(row.id, 'error', 'missing_handle_or_text'); continue }
+            if (!handle || !text) {
+              failed++
+              await markQueue(row.id, 'error', 'missing_handle_or_text')
+              console.warn(`[li_dm_sender] user ${userId} row ${row.id} skipped: missing handle/text`)
+              continue
+            }
 
             await driver.sendMessageToHandle(handle, text)
             await markQueue(row.id, 'sent')
+            sent++
+            console.log(`[li_dm_sender] user ${userId} row ${row.id} sent`)
             await sleep(1800 + Math.random() * 900)
           } catch (e) {
-            await markQueue(row.id, 'error', String(e?.message || e))
+            const errMsg = String(e?.message || e)
+            failed++
+            console.warn(`[li_dm_sender] user ${userId} row ${row.id} failed: ${errMsg}`)
+            await markQueue(row.id, 'error', errMsg)
+            if (isSeriousLinkedInError(errMsg)) {
+              await notifyOps(
+                'LinkedIn DM failed',
+                `LinkedIn DM send failed for user ${userId}: ${errMsg}`,
+                {
+                  meta: { queueId: row.id, userId, error: errMsg },
+                  throttleKey: `li_dm_sender:row:${errMsg}`
+                }
+              )
+            }
           }
         }
       } catch (e) {
-        for (const row of items) await markQueue(row.id, 'error', `driver_init_failed:${String(e?.message || e)}`)
+        const reason = String(e?.message || e)
+        failed += items.length
+        console.error(`[li_dm_sender] user ${userId} driver init failed: ${reason}`)
+        for (const row of items) await markQueue(row.id, 'error', `driver_init_failed:${reason}`)
+        if (isSeriousLinkedInError(reason) || reason.includes('driver_init_failed')) {
+          await notifyOps(
+            'LinkedIn DM driver failed',
+            `LinkedIn DM driver failed to initialize for user ${userId}: ${reason}`,
+            {
+              meta: { userId, error: reason },
+              throttleKey: `li_dm_sender:driver:${reason}`
+            }
+          )
+        }
       } finally {
+        console.log(`[li_dm_sender] user ${userId} summary: sent=${sent}, failed=${failed}`)
         try { await driver.close?.() } catch {}
       }
     }
-  } catch {}
+  } catch (err) {
+    const message = String(err?.message || err)
+    console.error('[li_dm_sender] tick_error', message)
+    await notifyOps('LinkedIn DM tick failed', `tickLinkedInSender threw: ${message}`, {
+      meta: { error: message },
+      throttleKey: `li_dm_sender:tick:${message}`
+    })
+  }
 }
