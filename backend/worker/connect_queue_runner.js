@@ -1,14 +1,21 @@
 import { supaAdmin } from '../db.js'
 import { sendLinkedInConnect } from '../lib/li_connect.js'
+import { isSeriousLinkedInError, notifyOps } from '../utils/ops_alerts.js'
 
 const LOOP_INTERVAL_MS = Number(process.env.CONNECT_QUEUE_INTERVAL_MS || 20000)
+const LOG_PREFIX = '[connect_queue]'
 
 export function startConnectQueueWorker() {
   async function cycle() {
     try {
       await tickOnce()
     } catch (e) {
-      console.log('[connect_queue] tick_error', e?.message || e)
+      const message = String(e?.message || e)
+      console.error(`${LOG_PREFIX} tick_error`, message)
+      await notifyOps('Connect queue tick failed', `startConnectQueueWorker tick threw: ${message}`, {
+        meta: { error: message },
+        throttleKey: `connect_queue:tick:${message}`
+      })
     } finally {
       setTimeout(cycle, LOOP_INTERVAL_MS)
     }
@@ -24,6 +31,7 @@ async function tickOnce() {
   try {
     const result = await sendLinkedInConnect(job)
     if (result?.ok) {
+      console.log(`${LOG_PREFIX} job ${job.id} sent (${result?.result?.status || 'ok'})`)
       await supaAdmin
         .from('connect_queue')
         .update({
@@ -34,24 +42,38 @@ async function tickOnce() {
         })
         .eq('id', job.id)
     } else {
+      const errMsg = String(result?.error || 'send_failed')
+      console.warn(`${LOG_PREFIX} job ${job.id} failed: ${errMsg}`)
       await supaAdmin
         .from('connect_queue')
         .update({
           status: 'error',
           updated_at: new Date().toISOString(),
-          error: (result?.error || 'send_failed').slice(0, 240)
+          error: errMsg.slice(0, 240)
         })
         .eq('id', job.id)
+      if (isSeriousLinkedInError(errMsg)) {
+        await notifyOps('LinkedIn connect failed', `Connect queue job ${job.id} failed: ${errMsg}`, {
+          meta: { jobId: job.id, userId: job.user_id, error: errMsg },
+          throttleKey: `connect_queue:job:${errMsg}`
+        })
+      }
     }
   } catch (e) {
+    const errMsg = String(e?.message || e)
+    console.error(`${LOG_PREFIX} job ${job.id} exception: ${errMsg}`)
     await supaAdmin
       .from('connect_queue')
       .update({
         status: 'error',
         updated_at: new Date().toISOString(),
-        error: String(e?.message || e).slice(0, 240)
+        error: errMsg.slice(0, 240)
       })
       .eq('id', job.id)
+    await notifyOps('LinkedIn connect exception', `Exception while sending connect queue job ${job.id}: ${errMsg}`, {
+      meta: { jobId: job.id, userId: job.user_id, error: errMsg },
+      throttleKey: `connect_queue:exception:${errMsg}`
+    })
   }
 }
 
@@ -65,7 +87,11 @@ async function dequeueNext() {
     .limit(1)
 
   if (error) {
-    console.log('[connect_queue] fetch_error', error.message)
+    console.error(`${LOG_PREFIX} fetch_error`, error.message)
+    await notifyOps('Connect queue fetch error', `Failed to fetch connect queue job: ${error.message}`, {
+      meta: { error: error.message },
+      throttleKey: 'connect_queue:fetch_error'
+    })
     return null
   }
 
@@ -77,5 +103,6 @@ async function dequeueNext() {
     .update({ status: 'processing', updated_at: new Date().toISOString() })
     .eq('id', job.id)
 
+  console.log(`${LOG_PREFIX} dequeued job ${job.id} for user ${job.user_id}`)
   return { ...job, status: 'processing' }
 }
