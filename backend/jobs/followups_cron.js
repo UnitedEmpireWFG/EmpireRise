@@ -35,7 +35,7 @@ export function startFollowupsCron() {
         .from("leads")
         .select("*")
         .lte("next_touch_at", new Date().toISOString())
-        .eq("dnc", false)
+        .eq("do_not_contact", false)
         .limit(100);
 
       const rows = [];
