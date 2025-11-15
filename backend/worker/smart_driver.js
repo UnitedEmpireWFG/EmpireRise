@@ -2,6 +2,7 @@
 import { supa } from '../db.js'
 import { aiComplete } from '../lib/ai.js'
 import { timePolicy } from '../services/time_windows.js'
+import { fetchViaDriver, normalizeItem } from '../routes/import_linkedin.js'
 
 const BATCH = Number(process.env.SMART_BATCH || 25)         // how many prospects per tick
 const LOOP_MS = Number(process.env.SMART_LOOP_MS || 60_000) // 60s default
@@ -25,41 +26,108 @@ async function getActiveUsers() {
   return users
 }
 
-async function pullProspects({ userId }) {
-  // Pull staged LI contacts not yet in prospects.
+async function popStagedRows(userId) {
   // Prefer the RPC (which handles row locking + processed_at) but gracefully
   // fall back to manual queries if the RPC is unavailable or misconfigured.
-
-  let staged = []
 
   const { data: rpcRows, error: rpcError } = await supa
     .rpc('li_stage_for_user', { p_user_id: userId, p_limit: BATCH })
 
-  if (!rpcError) {
-    staged = rpcRows || []
-  } else {
-    const msg = rpcError.message || ''
-    // If the RPC exists but is misconfigured we still want to proceed.
-    console.warn('smart_driver:pullProspects rpc_error', msg)
+  if (!rpcError) return rpcRows || []
 
-    const { data, error: fallbackError } = await supa
+  const msg = rpcError.message || ''
+  console.warn('smart_driver:pullProspects rpc_error', msg)
+
+  const { data, error: fallbackError } = await supa
+    .from('li_contacts_stage')
+    .select('id,user_id,name,headline,company,title,region,public_id,profile_url,created_at')
+    .eq('user_id', userId)
+    .is('processed_at', null)
+    .order('created_at', { ascending: true })
+    .limit(BATCH)
+
+  if (fallbackError) throw new Error('pullProspects.stage_error ' + fallbackError.message)
+  const staged = data || []
+
+  const ids = staged.map(row => row.id).filter(Boolean)
+  if (ids.length) {
+    const { error: markError } = await supa
       .from('li_contacts_stage')
-      .select('id,user_id,name,headline,company,title,region,public_id,profile_url,created_at')
+      .update({ processed_at: nowIso() })
+      .in('id', ids)
+    if (markError) throw new Error('pullProspects.mark_error ' + markError.message)
+  }
+
+  return staged
+}
+
+async function stageFromDriver({ userId }) {
+  if (!userId) return { staged: 0, fetched: 0 }
+
+  try {
+    const fetched = await fetchViaDriver({ userId, limit: BATCH, flavor: 'prospects' })
+    const dedup = new Map()
+
+    for (const raw of fetched || []) {
+      const normalized = normalizeItem(raw)
+      if (!normalized || dedup.has(normalized.fingerprint)) continue
+      dedup.set(normalized.fingerprint, normalized)
+    }
+
+    const rows = Array.from(dedup.values())
+    if (!rows.length) return { staged: 0, fetched: fetched?.length || 0 }
+
+    const fingerprints = rows.map(r => r.fingerprint)
+    const { data: existing, error: existingError } = await supa
+      .from('li_contacts_stage')
+      .select('fingerprint')
       .eq('user_id', userId)
-      .is('processed_at', null)
-      .order('created_at', { ascending: true })
-      .limit(BATCH)
+      .in('fingerprint', fingerprints)
 
-    if (fallbackError) throw new Error('pullProspects.stage_error ' + fallbackError.message)
-    staged = data || []
+    if (existingError) throw new Error('stageFromDriver.lookup_error ' + existingError.message)
 
-    const ids = staged.map(row => row.id).filter(Boolean)
-    if (ids.length) {
-      const { error: markError } = await supa
-        .from('li_contacts_stage')
-        .update({ processed_at: nowIso() })
-        .in('id', ids)
-      if (markError) throw new Error('pullProspects.mark_error ' + markError.message)
+    const existingSet = new Set((existing || []).map(r => r.fingerprint))
+    const payload = rows
+      .filter(r => !existingSet.has(r.fingerprint))
+      .map(r => ({
+        user_id: userId,
+        fingerprint: r.fingerprint,
+        public_id: r.public_id,
+        profile_url: r.profile_url,
+        name: r.name,
+        headline: r.headline,
+        company: r.company,
+        title: r.title,
+        region: r.region,
+        raw: r.raw,
+        created_at: nowIso(),
+        processed_at: null
+      }))
+
+    if (!payload.length) return { staged: 0, fetched: fetched?.length || 0, duplicates: existingSet.size }
+
+    const { error: upsertError } = await supa
+      .from('li_contacts_stage')
+      .upsert(payload, { onConflict: 'user_id,fingerprint' })
+    if (upsertError) throw new Error('stageFromDriver.upsert_error ' + upsertError.message)
+
+    return { staged: payload.length, fetched: fetched?.length || 0, duplicates: existingSet.size }
+  } catch (err) {
+    console.warn('smart_driver:stageFromDriver_error', err?.message || err)
+    return { staged: 0, fetched: 0, error: err?.message || String(err) }
+  }
+}
+
+async function pullProspects({ userId }) {
+  // Pull staged LI contacts not yet in prospects. If the stage is empty, try
+  // to prefill it via the LinkedIn driver before giving up.
+
+  let staged = await popStagedRows(userId).catch(() => [])
+
+  if (!staged?.length) {
+    const stagedResult = await stageFromDriver({ userId })
+    if (stagedResult.staged > 0) {
+      staged = await popStagedRows(userId).catch(() => [])
     }
   }
 
