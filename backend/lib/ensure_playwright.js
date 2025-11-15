@@ -23,6 +23,31 @@ function hasChromium(path) {
   return !!(path && existsSync(path))
 }
 
+function chromiumExecutableFromDir(dirPath) {
+  const chromePath = join(dirPath, 'chrome-linux', 'chrome')
+  if (existsSync(chromePath)) return chromePath
+
+  const headlessShell = join(dirPath, 'chrome-linux', 'headless_shell')
+  if (existsSync(headlessShell)) return headlessShell
+
+  return null
+}
+
+function findInstalledChromium(browsersPath) {
+  if (!existsSync(browsersPath)) return null
+
+  const entries = readdirSync(browsersPath, { withFileTypes: true })
+  for (const dirent of entries) {
+    if (!dirent.isDirectory()) continue
+    if (!dirent.name.startsWith('chromium')) continue
+
+    const executablePath = chromiumExecutableFromDir(join(browsersPath, dirent.name))
+    if (executablePath) return executablePath
+  }
+
+  return null
+}
+
 function candidateBrowsersPaths() {
   const projectRoot = join(__dirname, '..')
   const envPath = process.env.PLAYWRIGHT_BROWSERS_PATH
@@ -59,6 +84,14 @@ function findLocalChromium() {
 
   for (const browsersPath of candidateBrowsersPaths()) {
     if (!existsSync(browsersPath)) continue
+
+    const manualExecutable = findInstalledChromium(browsersPath)
+    if (manualExecutable) {
+      process.env.PLAYWRIGHT_BROWSERS_PATH ||= browsersPath
+      console.log(`${LOG_PREFIX} Found Chromium via local cache at ${manualExecutable}`)
+      return manualExecutable
+    }
+
     const hasEntries = readdirSync(browsersPath).length > 0
     if (!hasEntries) continue
     const execPath = tryChromiumWithBrowsersPath(browsersPath)
@@ -118,6 +151,12 @@ async function runPlaywrightInstall(browsersPath) {
 async function installIfMissing() {
   const existingPath = findLocalChromium()
   if (existingPath) return existingPath
+
+  const preferredBrowsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH
+    || join(__dirname, '..', 'node_modules', 'playwright', '.local-browsers')
+
+  await runPlaywrightInstall(preferredBrowsersPath)
+
 
   const preferredBrowsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH
     || join(__dirname, '..', 'node_modules', 'playwright', '.local-browsers')
