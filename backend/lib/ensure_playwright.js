@@ -92,6 +92,8 @@ function findLocalChromium() {
       return manualExecutable
     }
 
+    const hasEntries = readdirSync(browsersPath).length > 0
+    if (!hasEntries) continue
     const execPath = tryChromiumWithBrowsersPath(browsersPath)
     if (execPath) return execPath
   }
@@ -149,6 +151,12 @@ async function runPlaywrightInstall(browsersPath) {
 async function installIfMissing() {
   const existingPath = findLocalChromium()
   if (existingPath) return existingPath
+
+  const preferredBrowsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH
+    || join(__dirname, '..', 'node_modules', 'playwright', '.local-browsers')
+
+  await runPlaywrightInstall(preferredBrowsersPath)
+
 
   const preferredBrowsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH
     || join(__dirname, '..', 'node_modules', 'playwright', '.local-browsers')
