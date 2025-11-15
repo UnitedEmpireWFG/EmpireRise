@@ -297,6 +297,35 @@ alter table if exists public.leads add column if not exists owner_id uuid;
 alter table if exists public.leads add column if not exists pipeline text;
 alter table if exists public.leads add column if not exists priority integer;
 drop index if exists leads_user_prospect_idx;
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'leads_user_prospect_unique'
+      and conrelid = 'public.leads'::regclass
+  ) then
+    delete from public.leads l
+    using (
+      select ctid
+      from (
+        select ctid,
+               row_number() over (
+                 partition by user_id, prospect_id
+                 order by updated_at desc nulls last, created_at desc nulls last, id
+               ) as rn
+        from public.leads
+        where prospect_id is not null
+      ) dedup
+      where dedup.rn > 1
+    ) stale
+    where l.ctid = stale.ctid;
+
+    alter table public.leads
+      add constraint leads_user_prospect_unique unique (user_id, prospect_id);
+  end if;
+end
+$$;
 alter table if exists public.leads
   add constraint leads_user_prospect_unique unique (user_id, prospect_id);
 create index if not exists leads_user_prospect_lookup_idx on public.leads(user_id, prospect_id);
