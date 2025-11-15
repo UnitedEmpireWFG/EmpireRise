@@ -194,6 +194,13 @@ create table if not exists public.prospects (
 );
 alter table if exists public.prospects add column if not exists profile_url text;
 alter table if exists public.prospects add column if not exists li_handle text;
+alter table if exists public.prospects add column if not exists handle text;
+alter table if exists public.prospects add column if not exists platform text default 'linkedin';
+alter table if exists public.prospects add column if not exists status text;
+alter table if exists public.prospects add column if not exists dnc boolean default false;
+alter table if exists public.prospects add column if not exists dnc_reason text;
+alter table if exists public.prospects add column if not exists profile_urls text[];
+alter table if exists public.prospects add column if not exists links jsonb;
 create index if not exists prospects_user_idx on public.prospects(user_id);
 create index if not exists prospects_user_stage_idx on public.prospects(user_id, stage);
 create unique index if not exists prospects_user_public_idx on public.prospects(user_id, public_id) where public_id is not null;
@@ -266,8 +273,33 @@ alter table if exists public.leads add column if not exists quality int default 
 alter table if exists public.leads add column if not exists do_not_contact boolean default false;
 alter table if exists public.leads add column if not exists last_declined_at timestamptz;
 alter table if exists public.leads add column if not exists notes text;
+alter table if exists public.leads add column if not exists full_name text;
+alter table if exists public.leads add column if not exists title text;
+alter table if exists public.leads add column if not exists company text;
+alter table if exists public.leads add column if not exists email text;
+alter table if exists public.leads add column if not exists phone text;
+alter table if exists public.leads add column if not exists source text;
+alter table if exists public.leads add column if not exists li_profile_id text;
+alter table if exists public.leads add column if not exists li_handle text;
+alter table if exists public.leads add column if not exists stage text;
+alter table if exists public.leads add column if not exists track text;
+alter table if exists public.leads add column if not exists confidence numeric;
+alter table if exists public.leads add column if not exists cool_off_until timestamptz;
+alter table if exists public.leads add column if not exists next_touch_at timestamptz;
+alter table if exists public.leads add column if not exists last_reply_at timestamptz;
+alter table if exists public.leads add column if not exists last_contact_at timestamptz;
+alter table if exists public.leads add column if not exists last_contact_channel text;
+alter table if exists public.leads add column if not exists birthday date;
+alter table if exists public.leads add column if not exists persona text;
+alter table if exists public.leads add column if not exists external_id text;
+alter table if exists public.leads add column if not exists workspace_id uuid;
+alter table if exists public.leads add column if not exists owner_id uuid;
+alter table if exists public.leads add column if not exists pipeline text;
+alter table if exists public.leads add column if not exists priority integer;
 create unique index if not exists leads_user_prospect_idx on public.leads(user_id, prospect_id) where prospect_id is not null;
 create index if not exists leads_user_status_idx on public.leads(user_id, status);
+create index if not exists leads_user_stage_idx on public.leads(user_id, stage);
+create index if not exists leads_user_track_idx on public.leads(user_id, track);
 
 -- Drafts + approvals ------------------------------------------------------------
 create table if not exists public.drafts (
@@ -306,6 +338,11 @@ begin
 end
 $$;
 alter table if exists public.drafts add column if not exists status text default 'draft';
+alter table if exists public.drafts add column if not exists contact_id uuid references public.contacts(id) on delete set null;
+alter table if exists public.drafts add column if not exists lead_id uuid references public.leads(id) on delete set null;
+alter table if exists public.drafts add column if not exists track text;
+alter table if exists public.drafts add column if not exists preview text;
+alter table if exists public.drafts add column if not exists scheduled_at timestamptz;
 create index if not exists drafts_user_idx on public.drafts(user_id);
 create index if not exists drafts_user_prospect_idx on public.drafts(user_id, prospect_id);
 
@@ -366,6 +403,18 @@ begin
 end
 $$;
 alter table if exists public.queue add column if not exists status text default 'draft';
+alter table if exists public.queue add column if not exists lead_id uuid references public.leads(id) on delete set null;
+alter table if exists public.queue add column if not exists contact_id uuid references public.contacts(id) on delete set null;
+alter table if exists public.queue add column if not exists provider text;
+alter table if exists public.queue add column if not exists li_profile_id text;
+alter table if exists public.queue add column if not exists to_name text;
+alter table if exists public.queue add column if not exists message text;
+alter table if exists public.queue add column if not exists track text;
+alter table if exists public.queue add column if not exists kind text;
+alter table if exists public.queue add column if not exists payload jsonb;
+alter table if exists public.queue add column if not exists meta jsonb;
+alter table if exists public.queue add column if not exists sent_at timestamptz;
+alter table if exists public.queue add column if not exists campaign text;
 create index if not exists queue_user_status_idx on public.queue(user_id, status);
 create index if not exists queue_user_sched_idx on public.queue(user_id, scheduled_at);
 
@@ -427,6 +476,350 @@ create table if not exists public.connect_log (
 );
 alter table public.connect_log add column if not exists created_at timestamptz default now();
 create index if not exists connect_log_platform_created_idx on public.connect_log(platform, created_at desc);
+
+-- Accounts + connection tokens -------------------------------------------------
+create table if not exists public.accounts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null,
+  provider text not null,
+  provider_account_id text,
+  access_token text,
+  refresh_token text,
+  expires_at timestamptz,
+  scope text,
+  metadata jsonb,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+alter table if exists public.accounts add column if not exists metadata jsonb;
+alter table if exists public.accounts add column if not exists updated_at timestamptz default now();
+create index if not exists accounts_user_idx on public.accounts(user_id);
+
+create table if not exists public.connections (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null,
+  platform text not null,
+  access_token text,
+  refresh_token text,
+  expires_at timestamptz,
+  scope text,
+  meta jsonb,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+alter table if exists public.connections add column if not exists meta jsonb;
+alter table if exists public.connections add column if not exists updated_at timestamptz default now();
+create unique index if not exists connections_user_platform_idx on public.connections(user_id, platform);
+
+create table if not exists public.credentials (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid,
+  provider text not null,
+  access_token text,
+  refresh_token text,
+  expires_at timestamptz,
+  created_at timestamptz default now()
+);
+alter table if exists public.credentials add column if not exists workspace_id uuid;
+
+create table if not exists public.imports (
+  id uuid primary key default gen_random_uuid(),
+  platform text not null,
+  external_id text not null,
+  status text default 'new',
+  payload jsonb,
+  created_at timestamptz default now()
+);
+create unique index if not exists imports_platform_external_idx on public.imports(platform, external_id);
+
+create table if not exists public.inbound_dedup (
+  id text primary key,
+  source text,
+  created_at timestamptz default now()
+);
+
+create table if not exists public.profiles (
+  id uuid primary key,
+  first_name text,
+  last_name text,
+  company text,
+  persona text,
+  calendly_url text,
+  timezone text,
+  metadata jsonb,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+alter table if exists public.profiles add column if not exists metadata jsonb;
+alter table if exists public.profiles add column if not exists updated_at timestamptz default now();
+
+create table if not exists public.users (
+  id uuid primary key default gen_random_uuid(),
+  email text,
+  name text,
+  created_at timestamptz default now()
+);
+
+create table if not exists public.settings (
+  id integer primary key default 1,
+  story_reply_fallback_hours integer default 48,
+  metadata jsonb,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+create table if not exists public.stats_hot_hours (
+  hour integer primary key,
+  score numeric,
+  updated_at timestamptz default now()
+);
+
+create table if not exists public.webinar_events (
+  id uuid primary key default gen_random_uuid(),
+  code text unique,
+  display_name text,
+  framing text,
+  schedule jsonb,
+  metadata jsonb,
+  created_at timestamptz default now()
+);
+
+-- Contacts + interaction memory ------------------------------------------------
+create table if not exists public.contacts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid,
+  platform text default 'linkedin',
+  handle text,
+  external_id text,
+  persona text,
+  name text,
+  first_name text,
+  last_name text,
+  headline text,
+  location text,
+  city text,
+  region text,
+  country text,
+  stage text default 'prospect',
+  status text default 'new',
+  tags text[],
+  note text,
+  last_note text,
+  profile_urls text[],
+  links jsonb,
+  bio text,
+  open_to_work boolean,
+  do_not_contact boolean default false,
+  dnc_reason text,
+  last_interaction_at timestamptz,
+  last_reply_at timestamptz,
+  source text,
+  ig_uid text,
+  psid text,
+  email text,
+  phone text,
+  workspace_id uuid,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+alter table if exists public.contacts add column if not exists tags text[];
+alter table if exists public.contacts add column if not exists profile_urls text[];
+alter table if exists public.contacts add column if not exists links jsonb;
+alter table if exists public.contacts add column if not exists bio text;
+alter table if exists public.contacts add column if not exists open_to_work boolean;
+alter table if exists public.contacts add column if not exists do_not_contact boolean default false;
+alter table if exists public.contacts add column if not exists dnc_reason text;
+alter table if exists public.contacts add column if not exists last_interaction_at timestamptz;
+alter table if exists public.contacts add column if not exists last_reply_at timestamptz;
+alter table if exists public.contacts add column if not exists ig_uid text;
+alter table if exists public.contacts add column if not exists psid text;
+alter table if exists public.contacts add column if not exists workspace_id uuid;
+create unique index if not exists contacts_platform_handle_idx on public.contacts(platform, handle) where handle is not null;
+create index if not exists contacts_platform_country_idx on public.contacts(platform, country);
+
+create table if not exists public.interactions (
+  id uuid primary key default gen_random_uuid(),
+  contact_id uuid not null references public.contacts(id) on delete cascade,
+  platform text,
+  type text,
+  direction text,
+  body text,
+  meta jsonb,
+  created_at timestamptz default now()
+);
+alter table if exists public.interactions add column if not exists meta jsonb;
+
+create table if not exists public.contact_events (
+  id uuid primary key default gen_random_uuid(),
+  lead_id uuid references public.leads(id) on delete cascade,
+  kind text,
+  platform text,
+  note text,
+  at timestamptz default now(),
+  meta jsonb,
+  created_at timestamptz default now()
+);
+
+create table if not exists public.timeline (
+  id uuid primary key default gen_random_uuid(),
+  lead_id uuid references public.leads(id) on delete cascade,
+  kind text,
+  detail text,
+  meta jsonb,
+  created_at timestamptz default now()
+);
+
+-- Messaging + replies ----------------------------------------------------------
+create table if not exists public.messages (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid,
+  user_id uuid,
+  lead_id uuid references public.leads(id) on delete set null,
+  contact_id uuid references public.contacts(id) on delete set null,
+  prospect_id uuid references public.prospects(id) on delete set null,
+  platform text,
+  track text,
+  kind text,
+  channel text,
+  target_url text,
+  post_excerpt text,
+  body text,
+  preview text,
+  status text default 'draft',
+  approved boolean default false,
+  scheduled_at timestamptz,
+  approved_at timestamptz,
+  sent_at timestamptz,
+  paused_at timestamptz,
+  error text,
+  meta jsonb,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+alter table if exists public.messages add column if not exists preview text;
+alter table if exists public.messages add column if not exists approved boolean default false;
+alter table if exists public.messages add column if not exists approved_at timestamptz;
+alter table if exists public.messages add column if not exists sent_at timestamptz;
+alter table if exists public.messages add column if not exists meta jsonb;
+create index if not exists messages_lead_idx on public.messages(lead_id);
+create index if not exists messages_status_idx on public.messages(status);
+
+create table if not exists public.replies (
+  id uuid primary key default gen_random_uuid(),
+  lead_id uuid references public.leads(id) on delete cascade,
+  contact_id uuid references public.contacts(id) on delete set null,
+  platform text,
+  text text,
+  from_lead boolean default true,
+  user_id uuid,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+create table if not exists public.sent_log (
+  id uuid primary key default gen_random_uuid(),
+  queue_id uuid references public.queue(id) on delete set null,
+  message_id uuid references public.messages(id) on delete set null,
+  platform text,
+  user_id uuid,
+  contact_id uuid,
+  lead_id uuid,
+  created_at timestamptz default now()
+);
+
+create table if not exists public.push_subs (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid,
+  endpoint text,
+  keys jsonb,
+  p256dh text,
+  auth text,
+  raw jsonb,
+  created_at timestamptz default now()
+);
+
+-- Conversation memory ----------------------------------------------------------
+create table if not exists public.conv_threads (
+  id uuid primary key default gen_random_uuid(),
+  contact_id uuid references public.contacts(id) on delete cascade,
+  platform text,
+  persona text,
+  state text,
+  priority integer default 0,
+  sentiment text,
+  engagement_count integer default 0,
+  replies integer default 0,
+  last_event_at timestamptz,
+  last_offer text,
+  metadata jsonb,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+alter table if exists public.conv_threads add column if not exists metadata jsonb;
+
+create table if not exists public.conv_messages (
+  id uuid primary key default gen_random_uuid(),
+  thread_id uuid references public.conv_threads(id) on delete cascade,
+  role text,
+  text text,
+  sentiment text,
+  meta jsonb,
+  created_at timestamptz default now()
+);
+
+-- Templates + AB testing -------------------------------------------------------
+create table if not exists public.msg_templates (
+  id uuid primary key default gen_random_uuid(),
+  name text,
+  platform text,
+  persona text,
+  body text,
+  active boolean default true,
+  created_at timestamptz default now()
+);
+
+create table if not exists public.msg_variants (
+  id uuid primary key default gen_random_uuid(),
+  template_id uuid references public.msg_templates(id) on delete cascade,
+  body text,
+  active boolean default true,
+  created_at timestamptz default now()
+);
+
+create table if not exists public.ab_variants (
+  id uuid primary key default gen_random_uuid(),
+  slot text not null,
+  label text,
+  body text,
+  payload jsonb,
+  trials integer default 0,
+  wins integer default 0,
+  active boolean default true,
+  created_at timestamptz default now()
+);
+create index if not exists ab_variants_slot_idx on public.ab_variants(slot);
+
+-- Logging ----------------------------------------------------------------------
+create table if not exists public.logs (
+  id uuid primary key default gen_random_uuid(),
+  level text,
+  scope text,
+  detail text,
+  meta jsonb,
+  created_at timestamptz default now()
+);
+
+create table if not exists public.request_logs (
+  id uuid primary key default gen_random_uuid(),
+  method text,
+  path text,
+  status integer,
+  duration_ms integer,
+  ip text,
+  headers jsonb,
+  body jsonb,
+  created_at timestamptz default now()
+);
 
 -- Helper trigger to bump updated_at ---------------------------------------------
 create or replace function public.set_updated_at()
@@ -520,6 +913,62 @@ begin
       before update on public.li_batch_prefs
       for each row execute function public.set_updated_at();
   end if;
+
+  if not exists (
+    select 1 from pg_trigger where tgname = 'trg_accounts_updated'
+  ) then
+    create trigger trg_accounts_updated
+      before update on public.accounts
+      for each row execute function public.set_updated_at();
+  end if;
+
+  if not exists (
+    select 1 from pg_trigger where tgname = 'trg_connections_updated'
+  ) then
+    create trigger trg_connections_updated
+      before update on public.connections
+      for each row execute function public.set_updated_at();
+  end if;
+
+  if not exists (
+    select 1 from pg_trigger where tgname = 'trg_contacts_updated'
+  ) then
+    create trigger trg_contacts_updated
+      before update on public.contacts
+      for each row execute function public.set_updated_at();
+  end if;
+
+  if not exists (
+    select 1 from pg_trigger where tgname = 'trg_messages_updated'
+  ) then
+    create trigger trg_messages_updated
+      before update on public.messages
+      for each row execute function public.set_updated_at();
+  end if;
+
+  if not exists (
+    select 1 from pg_trigger where tgname = 'trg_conv_threads_updated'
+  ) then
+    create trigger trg_conv_threads_updated
+      before update on public.conv_threads
+      for each row execute function public.set_updated_at();
+  end if;
+
+  if not exists (
+    select 1 from pg_trigger where tgname = 'trg_profiles_updated'
+  ) then
+    create trigger trg_profiles_updated
+      before update on public.profiles
+      for each row execute function public.set_updated_at();
+  end if;
+
+  if not exists (
+    select 1 from pg_trigger where tgname = 'trg_settings_updated'
+  ) then
+    create trigger trg_settings_updated
+      before update on public.settings
+      for each row execute function public.set_updated_at();
+  end if;
 end;
 $$;
 
@@ -560,6 +1009,56 @@ begin
 end;
 $$;
 
+drop function if exists public.contacts_unanswered(text[], text, integer, integer);
+
+create or replace function public.contacts_unanswered(
+  p_platforms text[] default array['linkedin'],
+  p_country text default null,
+  p_days integer default 30,
+  p_limit integer default 10
+)
+returns table (
+  id uuid,
+  name text,
+  platform text,
+  handle text,
+  stage text,
+  tags text[],
+  country text,
+  created_at timestamptz
+)
+language sql
+as $$
+  with last_inbound as (
+    select contact_id, max(created_at) as last_reply
+      from public.interactions
+     where direction = 'inbound'
+     group by contact_id
+  )
+  select c.id, c.name, c.platform, c.handle, c.stage, c.tags, c.country, c.created_at
+    from public.contacts c
+    left join last_inbound li on li.contact_id = c.id
+   where coalesce(c.do_not_contact, false) = false
+     and (p_country is null or c.country = p_country)
+     and (coalesce(p_platforms, array['linkedin']) is null or c.platform = any(p_platforms))
+     and (
+       li.last_reply is null or
+       li.last_reply < now() - make_interval(days => greatest(1, coalesce(p_days, 30)))
+     )
+   order by coalesce(li.last_reply, c.created_at) asc
+   limit greatest(1, coalesce(p_limit, 10));
+$$;
+
+create or replace function public.ab_inc_trials(vid uuid)
+returns void
+language sql
+as $$ update public.ab_variants set trials = trials + 1 where id = vid $$;
+
+create or replace function public.ab_inc_wins(vid uuid)
+returns void
+language sql
+as $$ update public.ab_variants set wins = wins + 1 where id = vid $$;
+
 -- Row level security ------------------------------------------------------------
 alter table public.app_settings enable row level security;
 alter table public.app_config enable row level security;
@@ -574,6 +1073,31 @@ alter table public.queue enable row level security;
 alter table public.candidates enable row level security;
 alter table public.connect_queue enable row level security;
 alter table public.connect_log enable row level security;
+alter table public.accounts enable row level security;
+alter table public.connections enable row level security;
+alter table public.credentials enable row level security;
+alter table public.imports enable row level security;
+alter table public.inbound_dedup enable row level security;
+alter table public.profiles enable row level security;
+alter table public.users enable row level security;
+alter table public.settings enable row level security;
+alter table public.stats_hot_hours enable row level security;
+alter table public.webinar_events enable row level security;
+alter table public.contacts enable row level security;
+alter table public.interactions enable row level security;
+alter table public.contact_events enable row level security;
+alter table public.timeline enable row level security;
+alter table public.messages enable row level security;
+alter table public.replies enable row level security;
+alter table public.sent_log enable row level security;
+alter table public.push_subs enable row level security;
+alter table public.conv_threads enable row level security;
+alter table public.conv_messages enable row level security;
+alter table public.msg_templates enable row level security;
+alter table public.msg_variants enable row level security;
+alter table public.ab_variants enable row level security;
+alter table public.logs enable row level security;
+alter table public.request_logs enable row level security;
 
 do $$
 begin
@@ -615,6 +1139,81 @@ begin
   end if;
   if not exists (select 1 from pg_policies where policyname = 'connect_log_all_rw') then
     create policy connect_log_all_rw on public.connect_log for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'accounts_all_rw') then
+    create policy accounts_all_rw on public.accounts for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'connections_all_rw') then
+    create policy connections_all_rw on public.connections for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'credentials_all_rw') then
+    create policy credentials_all_rw on public.credentials for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'imports_all_rw') then
+    create policy imports_all_rw on public.imports for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'inbound_dedup_all_rw') then
+    create policy inbound_dedup_all_rw on public.inbound_dedup for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'profiles_all_rw') then
+    create policy profiles_all_rw on public.profiles for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'users_all_rw') then
+    create policy users_all_rw on public.users for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'settings_all_rw') then
+    create policy settings_all_rw on public.settings for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'stats_hot_hours_all_rw') then
+    create policy stats_hot_hours_all_rw on public.stats_hot_hours for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'webinar_events_all_rw') then
+    create policy webinar_events_all_rw on public.webinar_events for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'contacts_all_rw') then
+    create policy contacts_all_rw on public.contacts for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'interactions_all_rw') then
+    create policy interactions_all_rw on public.interactions for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'contact_events_all_rw') then
+    create policy contact_events_all_rw on public.contact_events for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'timeline_all_rw') then
+    create policy timeline_all_rw on public.timeline for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'messages_all_rw') then
+    create policy messages_all_rw on public.messages for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'replies_all_rw') then
+    create policy replies_all_rw on public.replies for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'sent_log_all_rw') then
+    create policy sent_log_all_rw on public.sent_log for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'push_subs_all_rw') then
+    create policy push_subs_all_rw on public.push_subs for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'conv_threads_all_rw') then
+    create policy conv_threads_all_rw on public.conv_threads for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'conv_messages_all_rw') then
+    create policy conv_messages_all_rw on public.conv_messages for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'msg_templates_all_rw') then
+    create policy msg_templates_all_rw on public.msg_templates for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'msg_variants_all_rw') then
+    create policy msg_variants_all_rw on public.msg_variants for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'ab_variants_all_rw') then
+    create policy ab_variants_all_rw on public.ab_variants for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'logs_all_rw') then
+    create policy logs_all_rw on public.logs for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where policyname = 'request_logs_all_rw') then
+    create policy request_logs_all_rw on public.request_logs for all using (true) with check (true);
   end if;
 end
 $$;
