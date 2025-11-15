@@ -4,7 +4,8 @@
   "type": "module",
   "version": "1.0.0",
   "scripts": {
-    "backend": "node backend/server.js"
+    "backend": "node backend/server.js",
+    "lint": "npm --prefix backend run lint"
   },
   "dependencies": {
     "concurrently": "^8.2.2",

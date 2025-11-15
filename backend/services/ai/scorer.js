@@ -48,7 +48,9 @@ Return JSON with:
 
   const raw = await aiComplete(prompt)
   let out = { score: 0, why: 'n/a', tags: [], risk: '' }
-  try { out = { ...out, ...(JSON.parse(safeJson(raw))) } catch {}
+  try {
+    out = { ...out, ...JSON.parse(safeJson(raw)) }
+  } catch {}
   // clamp and coerce
   const score = Math.max(0, Math.min(100, Number(out.score || 0)))
   return { score, why: String(out.why || ''), tags: Array.isArray(out.tags) ? out.tags : [], risk: String(out.risk || '') }
