@@ -125,13 +125,22 @@ async function scoreLeads({ userId }) {
     // upsert to leads
     const { data: leadRow } = await supa
       .from('leads')
-      .select('id')
+      .select('id,score,quality,updated_at')
       .eq('user_id', userId)
       .eq('prospect_id', p.id) // NOTE: your prospection schema should have leads.prospect_id (uuid) FK → prospects.id
       .limit(1)
       .maybeSingle()
 
     if (leadRow?.id) {
+      const lastTouched = leadRow.updated_at ? new Date(leadRow.updated_at).getTime() : 0
+      const isFresh =
+        leadRow.score === score &&
+        leadRow.quality === score &&
+        lastTouched &&
+        Date.now() - lastTouched < 6 * 60 * 60 * 1000 // < 6h old, skip churn
+
+      if (isFresh) continue
+
       await upsertLead({
         type: 'update',
         match: { id: leadRow.id },
