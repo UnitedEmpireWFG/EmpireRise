@@ -171,7 +171,11 @@ async function upsertLead({ type, match = {}, payload }) {
       for (const [key, value] of Object.entries(match || {})) query = query.eq(key, value)
       return query
     }
-    return supa.from('leads').insert(values)
+    // Let Postgres handle the conflict atomically so we don't throw duplicate
+    // key errors (seen when multiple workers race to insert the same
+    // user_id/prospect_id pair).  upsert(..., { onConflict }) updates the row in
+    // a single round trip instead of failing and retrying manually.
+    return supa.from('leads').upsert(values, { onConflict: 'user_id,prospect_id' })
   }
 
   const attempt = await exec(payload)
@@ -181,6 +185,9 @@ async function upsertLead({ type, match = {}, payload }) {
   const lowered = message.toLowerCase()
 
   if (lowered.includes('duplicate key value') && type === 'insert') {
+    // The onConflict upsert above should prevent this path, but keep the logic
+    // as a defensive fallback. Update the existing lead to keep the score
+    // fresh instead of surfacing an error.
     const { user_id: userId, prospect_id: prospectId, created_at: _created, ...rest } = payload || {}
     if (userId && prospectId) {
       const updatePayload = { ...rest, updated_at: nowIso() }
