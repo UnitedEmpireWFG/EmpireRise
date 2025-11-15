@@ -326,6 +326,8 @@ begin
   end if;
 end
 $$;
+alter table if exists public.leads
+  add constraint leads_user_prospect_unique unique (user_id, prospect_id);
 create index if not exists leads_user_prospect_lookup_idx on public.leads(user_id, prospect_id);
 create index if not exists leads_user_status_idx on public.leads(user_id, status);
 create index if not exists leads_user_stage_idx on public.leads(user_id, stage);
