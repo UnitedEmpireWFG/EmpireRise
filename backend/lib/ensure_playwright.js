@@ -25,7 +25,13 @@ function hasChromium(path) {
 
 function resolveCliPath() {
   try {
-    return require.resolve('playwright/cli.js')
+    const pkgJsonPath = require.resolve('playwright/package.json')
+    const pkgDir = dirname(pkgJsonPath)
+    const cliPath = join(pkgDir, 'cli.js')
+    if (!existsSync(cliPath)) {
+      throw new Error('playwright_cli_missing')
+    }
+    return cliPath
   } catch (error) {
     console.error(`${LOG_PREFIX} Unable to resolve playwright CLI`, error)
     throw error
