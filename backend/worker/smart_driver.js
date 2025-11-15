@@ -102,6 +102,61 @@ async function pullProspects({ userId }) {
   return { pulled }
 }
 
+async function upsertLead({ type, match = {}, payload }) {
+  if (type === 'update') {
+    let query = supa.from('leads').update(payload)
+    for (const [key, value] of Object.entries(match || {})) query = query.eq(key, value)
+    const attempt = await query
+    if (!attempt.error) return attempt
+    throw new Error('scoreLeads.upsert_error ' + (attempt.error.message || 'update_failed'))
+  }
+
+  const { user_id: userId, prospect_id: prospectId, created_at: createdAt, ...rest } = payload || {}
+  if (!userId || !prospectId) {
+    throw new Error('scoreLeads.upsert_error missing_user_or_prospect')
+  }
+
+  const now = nowIso()
+  const refreshPayload = { ...rest, updated_at: now }
+  const refreshAttempt = await supa
+    .from('leads')
+    .update(refreshPayload)
+    .eq('user_id', userId)
+    .eq('prospect_id', prospectId)
+    .select('id')
+
+  if (!refreshAttempt.error && Array.isArray(refreshAttempt.data) && refreshAttempt.data.length) {
+    return refreshAttempt
+  }
+
+  const upsertPayload = {
+    ...payload,
+    created_at: createdAt || now,
+    updated_at: now
+  }
+
+  const doUpsert = async body => supa
+    .from('leads')
+    .upsert(body, { onConflict: 'user_id,prospect_id', ignoreDuplicates: false })
+    .select('id')
+    .maybeSingle()
+
+  let attempt = await doUpsert(upsertPayload)
+
+  if (attempt.error) {
+    const message = attempt.error.message || ''
+    if (message.toLowerCase().includes('column') && message.toLowerCase().includes('score')) {
+      const { score, ...fallbackPayload } = upsertPayload
+      attempt = await doUpsert(fallbackPayload)
+    }
+    if (attempt.error) {
+      throw new Error('scoreLeads.upsert_error ' + (attempt.error.message || message))
+    }
+  }
+
+  return attempt
+}
+
 async function scoreLeads({ userId }) {
   // Very simple heuristic → score prospects into leads if they match your region or title keywords
   // Extend this as you like.
