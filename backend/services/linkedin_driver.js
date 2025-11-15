@@ -204,6 +204,43 @@ export class LinkedInDriver {
     return (await msg.count()) > 0 && (await pending.count()) === 0
   }
 
+  async sendMessageToHandle(handle, text) {
+    await this.init()
+    const h = String(handle || '').replace(/^@/, '').trim()
+    const message = String(text || '').trim()
+    if (!h) throw new Error('missing_handle')
+    if (!message) throw new Error('missing_text')
+
+    await this.page.goto(`https://www.linkedin.com/in/${encodeURIComponent(h)}/`, { waitUntil: 'domcontentloaded' })
+    await wait(900)
+
+    const messageBtn = this.page.locator('button:has-text("Message")').first()
+    if (!(await messageBtn.count())) throw new Error('message_button_not_found')
+    await messageBtn.click().catch(() => {})
+    await wait(600)
+
+    const composer = this.page.locator('div[role="textbox"][contenteditable="true"], div.msg-form__contenteditable[contenteditable="true"]').first()
+    if (!(await composer.count())) throw new Error('message_composer_not_found')
+    await composer.click().catch(() => {})
+    await wait(200)
+    await composer.press('Control+A').catch(async () => {
+      await composer.press('Meta+A').catch(() => {})
+    })
+    await composer.press('Backspace').catch(() => {})
+    await composer.type(message).catch(async () => {
+      await this.page.keyboard.type(message)
+    })
+    await wait(200)
+
+    let sendBtn = this.page.locator('button[aria-label="Send now"]').first()
+    if (!(await sendBtn.count())) sendBtn = this.page.locator('button:has-text("Send")').last()
+    if (!(await sendBtn.count())) throw new Error('send_button_not_found')
+    await sendBtn.click().catch(() => {})
+    await wait(800)
+
+    return { ok: true }
+  }
+
   async close() {
     try { await this.page?.close() } catch {}
     try { await this.context?.close() } catch {}
