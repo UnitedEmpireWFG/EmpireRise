@@ -191,6 +191,30 @@ async function upsertLead({ type, match = {}, payload }) {
     return preflight
   }
 
+  const upsertPayload = {
+    ...payload,
+    created_at: createdAt || now,
+    updated_at: now
+  }
+
+  const attempt = await supa
+    .from('leads')
+    .upsert(upsertPayload, { onConflict: 'user_id,prospect_id', ignoreDuplicates: false })
+  }
+
+  const now = nowIso()
+  const refreshPayload = { ...rest, updated_at: now }
+  const preflight = await supa
+    .from('leads')
+    .update(refreshPayload)
+    .eq('user_id', userId)
+    .eq('prospect_id', prospectId)
+    .select('id')
+
+  if (!preflight.error && Array.isArray(preflight.data) && preflight.data.length) {
+    return preflight
+  }
+
   const insertPayload = { ...payload }
   if (!insertPayload.created_at) insertPayload.created_at = createdAt || now
   const attempt = await supa
@@ -202,6 +226,15 @@ async function upsertLead({ type, match = {}, payload }) {
   if (!attempt.error) return attempt
 
   const message = attempt.error.message || ''
+
+  if (message.toLowerCase().includes('column') && message.toLowerCase().includes('score')) {
+    const retryPayload = { ...upsertPayload }
+    delete retryPayload.score
+    const retry = await supa
+      .from('leads')
+      .upsert(retryPayload, { onConflict: 'user_id,prospect_id', ignoreDuplicates: false })
+      .select('id')
+      .maybeSingle()
   const lowered = message.toLowerCase()
 
   if (lowered.includes('duplicate key value')) {
