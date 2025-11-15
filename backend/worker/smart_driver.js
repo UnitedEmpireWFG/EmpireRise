@@ -165,48 +165,61 @@ async function scoreLeads({ userId }) {
 }
 
 async function upsertLead({ type, match = {}, payload }) {
-  const exec = async values => {
-    if (type === 'update') {
-      let query = supa.from('leads').update(values)
-      for (const [key, value] of Object.entries(match || {})) query = query.eq(key, value)
-      return query
-    }
-    // Let Postgres handle the conflict atomically so we don't throw duplicate
-    // key errors (seen when multiple workers race to insert the same
-    // user_id/prospect_id pair).  upsert(..., { onConflict }) updates the row in
-    // a single round trip instead of failing and retrying manually.
-    return supa.from('leads').upsert(values, { onConflict: 'user_id,prospect_id' })
+  if (type === 'update') {
+    let query = supa.from('leads').update(payload)
+    for (const [key, value] of Object.entries(match || {})) query = query.eq(key, value)
+    const attempt = await query
+    if (!attempt.error) return attempt
+    throw new Error('scoreLeads.upsert_error ' + (attempt.error.message || 'update_failed'))
   }
 
-  const attempt = await exec(payload)
+  const { user_id: userId, prospect_id: prospectId, created_at: createdAt, ...rest } = payload || {}
+  if (!userId || !prospectId) {
+    throw new Error('scoreLeads.upsert_error missing_user_or_prospect')
+  }
+
+  const now = nowIso()
+  const refreshPayload = { ...rest, updated_at: now }
+  const preflight = await supa
+    .from('leads')
+    .update(refreshPayload)
+    .eq('user_id', userId)
+    .eq('prospect_id', prospectId)
+    .select('id')
+
+  if (!preflight.error && Array.isArray(preflight.data) && preflight.data.length) {
+    return preflight
+  }
+
+  const insertPayload = { ...payload }
+  if (!insertPayload.created_at) insertPayload.created_at = createdAt || now
+  const attempt = await supa
+    .from('leads')
+    .insert(insertPayload)
+    .select('id')
+    .maybeSingle()
+
   if (!attempt.error) return attempt
 
   const message = attempt.error.message || ''
   const lowered = message.toLowerCase()
 
-  if (lowered.includes('duplicate key value') && type === 'insert') {
-    // The onConflict upsert above should prevent this path, but keep the logic
-    // as a defensive fallback. Update the existing lead to keep the score
-    // fresh instead of surfacing an error.
-    const { user_id: userId, prospect_id: prospectId, created_at: _created, ...rest } = payload || {}
-    if (userId && prospectId) {
-      const updatePayload = { ...rest, updated_at: nowIso() }
-      const retry = await supa
-        .from('leads')
-        .update(updatePayload)
-        .eq('user_id', userId)
-        .eq('prospect_id', prospectId)
-      if (!retry.error) return retry
-      throw new Error('scoreLeads.upsert_error ' + (retry.error.message || 'duplicate_upsert_failed'))
-    }
+  if (lowered.includes('duplicate key value')) {
+    const retry = await supa
+      .from('leads')
+      .update(refreshPayload)
+      .eq('user_id', userId)
+      .eq('prospect_id', prospectId)
+    if (!retry.error) return retry
+    throw new Error('scoreLeads.upsert_error ' + (retry.error.message || 'duplicate_retry_failed'))
   }
 
   if (lowered.includes('column') && lowered.includes('score')) {
-    const retryPayload = { ...payload }
+    const retryPayload = { ...insertPayload }
     delete retryPayload.score
-    const retry = await exec(retryPayload)
+    const retry = await supa.from('leads').insert(retryPayload).select('id').maybeSingle()
     if (!retry.error) return retry
-    throw new Error('scoreLeads.upsert_error ' + retry.error.message)
+    throw new Error('scoreLeads.upsert_error ' + (retry.error.message || message))
   }
 
   throw new Error('scoreLeads.upsert_error ' + message)
