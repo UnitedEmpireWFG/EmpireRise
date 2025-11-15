@@ -178,7 +178,23 @@ async function upsertLead({ type, match = {}, payload }) {
   if (!attempt.error) return attempt
 
   const message = attempt.error.message || ''
-  if (message.toLowerCase().includes('column') && message.toLowerCase().includes('score')) {
+  const lowered = message.toLowerCase()
+
+  if (lowered.includes('duplicate key value') && type === 'insert') {
+    const { user_id: userId, prospect_id: prospectId, created_at: _created, ...rest } = payload || {}
+    if (userId && prospectId) {
+      const updatePayload = { ...rest, updated_at: nowIso() }
+      const retry = await supa
+        .from('leads')
+        .update(updatePayload)
+        .eq('user_id', userId)
+        .eq('prospect_id', prospectId)
+      if (!retry.error) return retry
+      throw new Error('scoreLeads.upsert_error ' + (retry.error.message || 'duplicate_upsert_failed'))
+    }
+  }
+
+  if (lowered.includes('column') && lowered.includes('score')) {
     const retryPayload = { ...payload }
     delete retryPayload.score
     const retry = await exec(retryPayload)
