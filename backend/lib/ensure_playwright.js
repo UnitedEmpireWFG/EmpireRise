@@ -23,6 +23,17 @@ function hasChromium(path) {
   return !!(path && existsSync(path))
 }
 
+function setBrowsersPathFromExecutable(execPath) {
+  if (!execPath) return
+  const parts = execPath.split(/[/\\]+/)
+  const chromeIdx = parts.lastIndexOf('chrome-linux')
+  if (chromeIdx <= 0) return
+  const browsersRoot = parts.slice(0, chromeIdx - 1).join('/')
+  if (browsersRoot && !process.env.PLAYWRIGHT_BROWSERS_PATH) {
+    process.env.PLAYWRIGHT_BROWSERS_PATH = browsersRoot
+  }
+}
+
 function chromiumExecutableFromDir(dirPath) {
   const chromePath = join(dirPath, 'chrome-linux', 'chrome')
   if (existsSync(chromePath)) return chromePath
@@ -80,7 +91,10 @@ function tryChromiumWithBrowsersPath(browsersPath) {
 
 function findLocalChromium() {
   const existingPath = chromiumExecutablePath()
-  if (hasChromium(existingPath)) return existingPath
+  if (hasChromium(existingPath)) {
+    setBrowsersPathFromExecutable(existingPath)
+    return existingPath
+  }
 
   for (const browsersPath of candidateBrowsersPaths()) {
     if (!existsSync(browsersPath)) continue
@@ -161,6 +175,7 @@ async function installIfMissing() {
   if (!installedPath) {
     throw new Error('playwright_chromium_missing_after_install')
   }
+  setBrowsersPathFromExecutable(installedPath)
   console.log(`${LOG_PREFIX} Playwright Chromium ready at ${installedPath}`)
   return installedPath
 }

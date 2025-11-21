@@ -19,6 +19,16 @@ function normalizeRegion(value) {
   return trimmed.length ? trimmed : null
 }
 
+function displayName(entity = {}) {
+  const fromName = String(entity.name || '').trim()
+  if (fromName) return fromName
+
+  const parts = [entity.first_name, entity.last_name]
+    .map(v => String(v || '').trim())
+    .filter(Boolean)
+  return parts.join(' ').trim()
+}
+
 function regionMatchesAllowlist(region) {
   if (!LOCATION_ALLOWLIST.length) return true
   const normalized = normalizeRegion(region)
@@ -282,7 +292,7 @@ async function scoreLeads({ userId }) {
   // Extend this as you like.
   const { data: prospects, error: ePros } = await supa
     .from('prospects')
-    .select('id,name,headline,company,title,region,public_id,profile_url')
+    .select('id,first_name,last_name,headline,company,title,region,public_id,profile_url')
     .eq('user_id', userId)
     .order('created_at', { ascending: false })
     .limit(BATCH)
@@ -374,7 +384,7 @@ async function generateDrafts({ userId }) {
 
   const { data: prospects, error: eLoadP } = await supa
     .from('prospects')
-    .select('id,name,headline,company,title,region,profile_url,public_id')
+    .select('id,first_name,last_name,headline,company,title,region,profile_url,public_id')
     .in('id', prospectIds)
   if (eLoadP) throw new Error('generateDrafts.prospects_error ' + eLoadP.message)
 
@@ -385,6 +395,8 @@ async function generateDrafts({ userId }) {
   for (const lead of leads) {
     const p = map.get(lead.prospect_id)
     if (!p) continue
+
+    const name = displayName(p)
 
     let region = normalizeRegion(p.region)
     if (!region && (p.public_id || p.profile_url)) {
@@ -414,7 +426,7 @@ async function generateDrafts({ userId }) {
 
     // Build a brief + ask AI for a first touch
     const brief = [
-      `Prospect: ${p.name || '—'}`,
+      `Prospect: ${name || '—'}`,
       p.title ? `Title: ${p.title}` : null,
       p.company ? `Company: ${p.company}` : null,
       p.headline ? `Headline: ${p.headline}` : null,
