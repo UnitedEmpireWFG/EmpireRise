@@ -7,8 +7,49 @@ import { fetchProfileLocation } from '../drivers/driver_linkedin_smart.js'
 
 const BATCH = Number(process.env.SMART_BATCH || 25)         // how many prospects per tick
 const LOOP_MS = Number(process.env.SMART_LOOP_MS || 60_000) // 60s default
+const LOCATION_ALLOWLIST = String(process.env.SMART_LOCATION_ALLOWLIST || process.env.LOCATION_ALLOWLIST || '')
+  .split(',')
+  .map(s => s.trim().toLowerCase())
+  .filter(Boolean)
 
 function nowIso() { return new Date().toISOString() }
+
+function normalizeRegion(value) {
+  const trimmed = String(value || '').trim()
+  return trimmed.length ? trimmed : null
+}
+
+function regionMatchesAllowlist(region) {
+  if (!LOCATION_ALLOWLIST.length) return true
+  const normalized = normalizeRegion(region)
+  if (!normalized) return false
+  const lowered = normalized.toLowerCase()
+  return LOCATION_ALLOWLIST.some(needle => lowered.includes(needle))
+}
+
+async function enrichRegion({ userId, stageId, prospectId, publicId, profileUrl }) {
+  if (!userId || (!publicId && !profileUrl)) return null
+
+  const enriched = await fetchProfileLocation({
+    userId,
+    handle: publicId,
+    profileUrl
+  }).catch(() => null)
+
+  const location = normalizeRegion(enriched?.location)
+  if (!location) return null
+
+  const updates = []
+  if (prospectId) updates.push(
+    supa.from('prospects').update({ region: location }).eq('id', prospectId)
+  )
+  if (stageId) updates.push(
+    supa.from('li_contacts_stage').update({ region: location }).eq('id', stageId)
+  )
+  await Promise.all(updates).catch(() => {})
+
+  return location
+}
 
 async function getActiveUsers() {
   // Users who completed LI OAuth OR have cookies saved
@@ -166,13 +207,12 @@ async function pullProspects({ userId }) {
     }
 
     if (!insert.region && (insert.public_id || insert.profile_url)) {
-      const enriched = await fetchProfileLocation({
+      insert.region = await enrichRegion({
         userId,
-        handle: insert.public_id,
+        stageId: c.id,
+        publicId: insert.public_id,
         profileUrl: insert.profile_url
-      }).catch(() => null)
-
-      if (enriched?.location) insert.region = enriched.location
+      }) || null
     }
 
     const { error: eIns } = await supa.from('prospects').insert(insert)
@@ -240,22 +280,44 @@ async function upsertLead({ type, match = {}, payload }) {
 async function scoreLeads({ userId }) {
   // Very simple heuristic → score prospects into leads if they match your region or title keywords
   // Extend this as you like.
-  const { data: prospects, error: ePros } = await supa
+  const loadProspects = async (cols) => supa
     .from('prospects')
-    .select('id,name,headline,company,title,region')
+    .select(cols)
     .eq('user_id', userId)
     .order('created_at', { ascending: false })
     .limit(BATCH)
+
+  let { data: prospects, error: ePros } = await loadProspects('id,name,headline,company,title,region,public_id,profile_url')
+
+  // Gracefully fall back if older databases are missing optional columns like "headline"
+  if (ePros && /column\s+prospects\.headline/i.test(ePros.message || '')) {
+    console.warn('smart_driver:scoreLeads missing_headline_column, falling back without it')
+    ({ data: prospects, error: ePros } = await loadProspects('id,name,company,title,region,public_id,profile_url'))
+  }
+
   if (ePros) throw new Error('scoreLeads.load_error ' + ePros.message)
 
   let scored = 0
   for (const p of (prospects || [])) {
+    let region = normalizeRegion(p.region)
+    if (!region && (p.public_id || p.profile_url)) {
+      region = await enrichRegion({
+        userId,
+        prospectId: p.id,
+        publicId: p.public_id,
+        profileUrl: p.profile_url
+      })
+    }
+
+    if (!regionMatchesAllowlist(region)) continue
+
     // compute a naive score
     let score = 0
     const t = `${p.title || ''} ${p.headline || ''}`.toLowerCase()
     if (t.includes('founder') || t.includes('owner') || t.includes('director') || t.includes('principal')) score += 40
     if (t.includes('marketing') || t.includes('growth') || t.includes('sales')) score += 20
-    if ((p.region || '').toLowerCase().includes('alberta') || (p.region || '').toLowerCase().includes('ontario')) score += 10
+    const regionText = (region || '').toLowerCase()
+    if (regionText.includes('alberta') || regionText.includes('ontario')) score += 10
 
     // upsert to leads
     const { data: leadRow } = await supa
@@ -319,11 +381,25 @@ async function generateDrafts({ userId }) {
   const prospectIds = leads.map(l => l.prospect_id).filter(Boolean)
   if (!prospectIds.length) return { drafted: 0 }
 
-  const { data: prospects, error: eLoadP } = await supa
+  const { data: prospectsLoad, error: eLoadP } = await supa
     .from('prospects')
-    .select('id,name,headline,company,title,region,profile_url')
+    .select('id,name,headline,company,title,region,profile_url,public_id')
     .in('id', prospectIds)
-  if (eLoadP) throw new Error('generateDrafts.prospects_error ' + eLoadP.message)
+
+  let prospects = prospectsLoad
+  let ePros = eLoadP
+
+  if (ePros && /column\s+prospects\.headline/i.test(ePros.message || '')) {
+    console.warn('smart_driver:generateDrafts missing_headline_column, falling back without it')
+    const retry = await supa
+      .from('prospects')
+      .select('id,name,company,title,region,profile_url,public_id')
+      .in('id', prospectIds)
+    prospects = retry.data
+    ePros = retry.error
+  }
+
+  if (ePros) throw new Error('generateDrafts.prospects_error ' + ePros.message)
 
   const map = new Map()
   for (const p of (prospects || [])) map.set(p.id, p)
@@ -332,6 +408,18 @@ async function generateDrafts({ userId }) {
   for (const lead of leads) {
     const p = map.get(lead.prospect_id)
     if (!p) continue
+
+    let region = normalizeRegion(p.region)
+    if (!region && (p.public_id || p.profile_url)) {
+      region = await enrichRegion({
+        userId,
+        prospectId: p.id,
+        publicId: p.public_id,
+        profileUrl: p.profile_url
+      })
+    }
+
+    if (!regionMatchesAllowlist(region)) continue
 
     // dedupe if a recent draft exists
     const { data: recent } = await supa
@@ -353,7 +441,7 @@ async function generateDrafts({ userId }) {
       p.title ? `Title: ${p.title}` : null,
       p.company ? `Company: ${p.company}` : null,
       p.headline ? `Headline: ${p.headline}` : null,
-      p.region ? `Region: ${p.region}` : null,
+      region ? `Region: ${region}` : null,
       p.profile_url ? `Profile: ${p.profile_url}` : null,
     ].filter(Boolean).join('\n')
 
