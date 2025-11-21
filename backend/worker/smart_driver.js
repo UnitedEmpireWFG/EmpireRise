@@ -3,6 +3,7 @@ import { supa } from '../db.js'
 import { aiComplete } from '../lib/ai.js'
 import { timePolicy } from '../services/time_windows.js'
 import { fetchViaDriver, normalizeItem } from '../routes/import_linkedin.js'
+import { fetchProfileLocation } from '../drivers/driver_linkedin_smart.js'
 
 const BATCH = Number(process.env.SMART_BATCH || 25)         // how many prospects per tick
 const LOOP_MS = Number(process.env.SMART_LOOP_MS || 60_000) // 60s default
@@ -163,6 +164,17 @@ async function pullProspects({ userId }) {
       source: 'linkedin',
       created_at: nowIso()
     }
+
+    if (!insert.region && (insert.public_id || insert.profile_url)) {
+      const enriched = await fetchProfileLocation({
+        userId,
+        handle: insert.public_id,
+        profileUrl: insert.profile_url
+      }).catch(() => null)
+
+      if (enriched?.location) insert.region = enriched.location
+    }
+
     const { error: eIns } = await supa.from('prospects').insert(insert)
     if (!eIns) pulled++
   }

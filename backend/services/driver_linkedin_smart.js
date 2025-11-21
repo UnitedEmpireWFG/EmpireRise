@@ -239,6 +239,26 @@ export class LinkedInSmart {
     return this.connectWithOptionalNote(handle, '')
   }
 
+  async profileLocation(handle) {
+    await this.init()
+    const h = String(handle || '').replace(/^@/, '')
+    if (!h) throw new Error('missing_handle')
+
+    await this.page.goto(`https://www.linkedin.com/in/${encodeURIComponent(h)}/`, { waitUntil: 'domcontentloaded' })
+    await wait(900)
+
+    const selectors = [
+      '.pv-text-details__left-panel div.text-body-small.inline',
+      'div.text-body-small.inline.t-black--light.break-words',
+      '[data-test-id="location"]',
+      'section.pv-contact-info__contact-type.ci-address .pv-contact-info__ci-container',
+      'main li.t-14.t-normal span[aria-hidden="true"]'
+    ]
+
+    const location = await this._firstText(this.page, selectors)
+    return location || null
+  }
+
   async isConnected(handle) {
     await this.init()
     const h = String(handle || '').replace(/^@/,'')

@@ -57,6 +57,15 @@ function profileUrlFor(handle, fallbackUrl) {
   return `https://www.linkedin.com/in/${encodeURIComponent(handle)}`
 }
 
+async function getProfileLocation(driver, handle) {
+  try {
+    const location = await driver.profileLocation(handle)
+    return location || null
+  } catch {
+    return null
+  }
+}
+
 function mapProspect(meta) {
   if (!meta || typeof meta !== 'object') return null
   const handle = meta.handle || meta.public_id || null
@@ -90,6 +99,22 @@ export async function fetchConnections({ userId, limit = 50 }) {
   // Until a dedicated scraper exists, reuse the suggested people feed so callers
   // still receive fresh prospects sourced from LinkedIn.
   return fetchProspects({ userId, limit })
+}
+
+export async function fetchProfileLocation({ userId, handle, profileUrl }) {
+  const normalizedHandle = normalizeHandle(handle, profileUrl)
+  if (!normalizedHandle) return null
+
+  const location = await runWithDriver(userId, async (driver) => {
+    return await getProfileLocation(driver, normalizedHandle)
+  })
+
+  if (!location) return null
+  return {
+    handle: normalizedHandle,
+    profileUrl: profileUrlFor(normalizedHandle, profileUrl),
+    location
+  }
 }
 
 export async function sendConnectionRequest({ userId, handle, profileUrl, note }) {
