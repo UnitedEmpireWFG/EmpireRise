@@ -18,17 +18,18 @@ async function tableHasColumn(table, column) {
   const key = `${table}.${column}`
   if (columnCache.has(key)) return columnCache.get(key)
 
-  const { data, error } = await supaAdmin
-    .schema('information_schema')
-    .from('columns')
-    .select('column_name')
-    .eq('table_schema', 'public')
-    .eq('table_name', table)
-    .eq('column_name', column)
+  const { error } = await supaAdmin
+    .from(table)
+    .select(column)
     .limit(1)
 
-  const exists = !error && (data || []).length > 0
-  if (error) console.warn('schema:column_check_error', key, error.message)
+  const errorMsg = (error?.message || '').toLowerCase()
+  const missingColumn = errorMsg.includes('column') && errorMsg.includes('does not exist')
+  const exists = error ? !missingColumn : true
+
+  if (error && !missingColumn) {
+    console.warn('schema:column_check_error', key, error.message)
+  }
   columnCache.set(key, exists)
   return exists
 }
@@ -626,19 +627,22 @@ Message:
 
     // Insert draft → create approval row for UI review
     try {
-      const { data: dIns, error: eD } = await supa.from('drafts').insert({
+      const { data: insertedDrafts, error: eD } = await supa.from('drafts').insert({
         user_id: userId,
         prospect_id: p.id,
         platform: 'linkedin',
         body,
         status: 'pending',
         created_at: nowIso()
-      }).select('id').single()
+      }).select('id')
       if (eD) throw eD
+
+      const draftsWritten = Array.isArray(insertedDrafts) ? insertedDrafts.length : (insertedDrafts ? 1 : 0)
+      const draftId = Array.isArray(insertedDrafts) ? insertedDrafts[0]?.id : insertedDrafts?.id
 
       const { error: eApproval } = await supa.from('approvals').insert({
         user_id: userId,
-        draft_id: dIns.id,
+        draft_id: draftId,
         status: 'pending',
         created_at: nowIso()
       })
@@ -654,13 +658,13 @@ Message:
           status: 'scheduled',
           scheduled_at: nowIso(),
           created_at: nowIso(),
-          draft_id: dIns.id,
+          draft_id: draftId,
           preview: body.slice(0, 120)
         })
         if (eQueue) throw eQueue
       }
 
-      drafted++
+      drafted += draftsWritten
     } catch (err) {
       console.error('SmartDriver[draft_error]', {
         message: err?.message,
