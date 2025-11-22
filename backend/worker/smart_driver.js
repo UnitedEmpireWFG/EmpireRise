@@ -509,6 +509,23 @@ async function generateDrafts({ userId }) {
   const map = new Map()
   for (const p of (prospects || [])) map.set(p.id, p)
 
+  const candidates = leads
+    .map(lead => map.get(lead.prospect_id))
+    .filter(Boolean)
+
+  console.log('SmartDriver[draft_candidates]', {
+    candidates_total: candidates.length,
+    sample: candidates.slice(0, 5).map(p => ({
+      id: p.id,
+      status: p.status,
+      source: p.source,
+      owner_user_id: p.owner_user_id,
+      do_not_contact: p.do_not_contact,
+      last_contacted_at: p.last_contacted_at,
+      score: p.score
+    }))
+  })
+
   let drafted = 0
   for (const lead of leads) {
     const p = map.get(lead.prospect_id)
