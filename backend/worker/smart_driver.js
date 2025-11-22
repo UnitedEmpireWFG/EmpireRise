@@ -526,21 +526,6 @@ async function generateDrafts({ userId }) {
   const candidates = leads
     .map(lead => map.get(lead.prospect_id))
     .filter(Boolean)
-    .filter(p => {
-      const ownerMatches = p.owner_user_id === userId
-      const status = typeof p.status === 'string' ? p.status.toLowerCase() : ''
-      const source = typeof p.source === 'string' ? p.source.toLowerCase() : ''
-      const doNotContact = p.do_not_contact === true
-      const lastContactedMissing = p.last_contacted_at == null
-
-      return (
-        ownerMatches &&
-        status === 'new' &&
-        source === 'linkedin' &&
-        !doNotContact &&
-        lastContactedMissing
-      )
-    })
 
   console.log('SmartDriver[draft_candidates]', {
     candidates_total: candidates.length,
@@ -555,7 +540,34 @@ async function generateDrafts({ userId }) {
     }))
   })
 
-  const candidateIds = new Set(candidates.map(p => p.id))
+  const finalists = candidates.filter(p => {
+    const ownerMatches = p.owner_user_id === userId // require owner_user_id matches current user
+    const status = typeof p.status === 'string' ? p.status.toLowerCase() : ''
+    const source = typeof p.source === 'string' ? p.source.toLowerCase() : ''
+    const doNotContact = p.do_not_contact === true // require do_not_contact is not true
+    const lastContactedMissing = p.last_contacted_at == null // require last_contacted_at is null or undefined
+
+    return (
+      ownerMatches &&
+      status === 'new' && // require status is "New"
+      source === 'linkedin' && // require source is "LinkedIn"
+      !doNotContact && // require not opted out of contact
+      lastContactedMissing // require no prior contact
+    )
+  })
+
+  console.log('SmartDriver[draft_finalists]', {
+    finalists_count: finalists.length,
+    sample: finalists.slice(0, 5).map(p => ({
+      id: p.id,
+      status: p.status,
+      source: p.source,
+      owner_user_id: p.owner_user_id,
+      score: p.score
+    }))
+  })
+
+  const candidateIds = new Set(finalists.map(p => p.id))
 
   const draftedProspects = []
   let drafted = 0
