@@ -35,5 +35,10 @@
     "smoke:fe": "node ./smoke/smoke_frontend.mjs",
     "smoke:be": "node ./smoke/smoke_backend.mjs",
     "smoke:all": "npm run smoke:fe && npm run smoke:be"
+  },
+  "playwright": {
+    "browsers": [
+      "chromium"
+    ]
   }
 }

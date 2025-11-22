@@ -1,13 +1,10 @@
 import { chromium } from 'playwright'
-
-import { ensurePlaywrightChromium } from '../lib/ensure_playwright.js'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { normalize, looksCanadian, notInExcluded } from '../services/filters/smart_canada.js'
 
 const wait = (ms) => new Promise(r => setTimeout(r, ms))
 const bool = (v, d=false) => String(v ?? d).toLowerCase() === 'true'
-const num  = (v, d=0) => (Number(v) || d)
 const CARD_SELECTORS = [
   '[data-test-reusable-connection-suggestion-card]',
   'li.discover-person-card',
@@ -22,8 +19,6 @@ const SUGGESTED_URLS = [
 
 export class LinkedInSmart {
   constructor(opts = {}) {
-    this.headful = bool(process.env.LI_HEADFUL, false)
-    this.slowMo  = num(process.env.LI_SLOW_MO_MS, 0)
     this.browser = null
     this.context = null
     this.page = null
@@ -32,8 +27,8 @@ export class LinkedInSmart {
   }
 
   async launch() {
-    await ensurePlaywrightChromium()
-    this.browser = await chromium.launch({ headless: !this.headful, slowMo: this.slowMo })
+    console.log('Playwright launching with default Chromium')
+    this.browser = await chromium.launch({ headless: true })
     this.context = await this.browser.newContext({ viewport: { width: 1420, height: 900 } })
     this.page = await this.context.newPage()
   }
