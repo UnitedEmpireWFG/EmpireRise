@@ -56,9 +56,78 @@ async function enrichRegion({ userId, stageId, prospectId, publicId, profileUrl 
   if (stageId) updates.push(
     supa.from('li_contacts_stage').update({ region: location }).eq('id', stageId)
   )
-  await Promise.all(updates).catch(() => {})
+
+  // If the destination table does not have a region column, ignore the error so
+  // the worker keeps running against slimmer schemas.
+  await Promise.all(updates.map(async q => {
+    const { error } = await q
+    if (error) {
+      const msg = (error.message || '').toLowerCase()
+      if (msg.includes('column') && msg.includes('region')) return null
+      throw error
+    }
+    return null
+  })).catch(() => null)
 
   return location
+}
+
+function splitNameParts(name = '') {
+  const parts = String(name || '')
+    .split(/\s+/)
+    .map(s => s.trim())
+    .filter(Boolean)
+  if (!parts.length) return { first: null, last: null }
+  if (parts.length === 1) return { first: parts[0], last: null }
+  const [first, ...rest] = parts
+  return { first, last: rest.join(' ').trim() || null }
+}
+
+function normalizeProspectRow(row = {}) {
+  const first = row.first_name || row.firstName || null
+  const last = row.last_name || row.lastName || null
+  const name = displayName({ name: row.name, first_name: first, last_name: last })
+
+  return {
+    ...row,
+    first_name: first,
+    last_name: last,
+    name,
+    title: row.title || row.headline || null,
+    headline: row.headline || null,
+    region: row.region || row.location || null,
+    profile_url: row.profile_url || row.linkedin_url || row.url || null,
+    public_id: row.public_id || row.li_profile_id || row.li_handle || null
+  }
+}
+
+async function selectProspectsForUser({ userId, limit = BATCH }) {
+  const base = () => supa
+    .from('prospects')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(limit)
+
+  let attempt = await base().eq('user_id', userId)
+  if (attempt.error) {
+    const msg = (attempt.error.message || '').toLowerCase()
+    if (msg.includes('column') && msg.includes('user_id')) {
+      attempt = await base().eq('owner_user_id', userId)
+    }
+  }
+
+  if (attempt.error) throw new Error('scoreLeads.load_error ' + attempt.error.message)
+  return (attempt.data || []).map(normalizeProspectRow)
+}
+
+async function selectProspectsByIds(ids = []) {
+  if (!ids.length) return []
+  const { data, error } = await supa
+    .from('prospects')
+    .select('*')
+    .in('id', ids)
+  if (error) throw new Error('generateDrafts.prospects_error ' + error.message)
+  return (data || []).map(normalizeProspectRow)
 }
 
 async function getActiveUsers() {
@@ -226,6 +295,26 @@ async function pullProspects({ userId }) {
     }
 
     const { error: eIns } = await supa.from('prospects').insert(insert)
+    if (eIns) {
+      const msg = (eIns.message || '').toLowerCase()
+      if (msg.includes('column') || msg.includes('property')) {
+        const { first, last } = splitNameParts(insert.name)
+        const fallback = {
+          owner_user_id: userId,
+          first_name: c.first_name || first || null,
+          last_name: c.last_name || last || null,
+          company: c.company || null,
+          title: c.title || c.headline || null,
+          linkedin_url: c.profile_url || (c.public_id ? `https://www.linkedin.com/in/${c.public_id}` : null),
+          source: 'linkedin',
+          status: 'new',
+          created_at: nowIso()
+        }
+        await supa.from('prospects').insert(fallback)
+        pulled++
+        continue
+      }
+    }
     if (!eIns) pulled++
   }
 
@@ -290,13 +379,7 @@ async function upsertLead({ type, match = {}, payload }) {
 async function scoreLeads({ userId }) {
   // Very simple heuristic → score prospects into leads if they match your region or title keywords
   // Extend this as you like.
-  const { data: prospects, error: ePros } = await supa
-    .from('prospects')
-    .select('id,first_name,last_name,headline,company,title,region,public_id,profile_url')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .limit(BATCH)
-  if (ePros) throw new Error('scoreLeads.load_error ' + ePros.message)
+  const prospects = await selectProspectsForUser({ userId, limit: BATCH })
 
   let scored = 0
   for (const p of (prospects || [])) {
@@ -382,11 +465,7 @@ async function generateDrafts({ userId }) {
   const prospectIds = leads.map(l => l.prospect_id).filter(Boolean)
   if (!prospectIds.length) return { drafted: 0 }
 
-  const { data: prospects, error: eLoadP } = await supa
-    .from('prospects')
-    .select('id,first_name,last_name,headline,company,title,region,profile_url,public_id')
-    .in('id', prospectIds)
-  if (eLoadP) throw new Error('generateDrafts.prospects_error ' + eLoadP.message)
+  const prospects = await selectProspectsByIds(prospectIds)
 
   const map = new Map()
   for (const p of (prospects || [])) map.set(p.id, p)
