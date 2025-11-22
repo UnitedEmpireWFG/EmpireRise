@@ -25,12 +25,13 @@ async function tableHasColumn(table, column) {
 
   const errorMsg = (error?.message || '').toLowerCase()
   const missingColumn = errorMsg.includes('column') && errorMsg.includes('does not exist')
+  const schemaError = errorMsg.includes('schema') && errorMsg.includes('public')
   const exists = error ? !missingColumn : true
 
   if (error && !missingColumn) {
     console.warn('schema:column_check_error', key, error.message)
   }
-  columnCache.set(key, exists)
+  columnCache.set(key, schemaError ? false : exists)
   return exists
 }
 
@@ -455,7 +456,16 @@ async function scoreLeads({ userId }) {
         .from('prospects')
         .update({ score, updated_at: nowIso() })
         .eq('id', p.id)
-      if (prospectUpdateError) throw new Error('scoreLeads.prospect_update_error ' + prospectUpdateError.message)
+      if (prospectUpdateError) {
+        console.error('scoreLeads.prospect_update_error', {
+          id: p.id,
+          userId,
+          message: prospectUpdateError.message,
+          code: prospectUpdateError.code,
+          details: prospectUpdateError
+        })
+        throw new Error('scoreLeads.prospect_update_error ' + prospectUpdateError.message)
+      }
     }
 
     // upsert to leads
