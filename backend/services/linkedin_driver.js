@@ -30,7 +30,8 @@ export class LinkedInDriver {
   }
 
   async launch() {
-    this.browser = await chromium.launch({ headless: !this.headful, slowMo: this.slowMo })
+    console.log('Playwright launching with default Chromium')
+    this.browser = await chromium.launch({ headless: true })
     this.context = await this.browser.newContext({ viewport: { width: 1420, height: 900 } })
     this.page = await this.context.newPage()
   }

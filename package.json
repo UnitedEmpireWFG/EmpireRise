@@ -5,7 +5,8 @@
   "version": "1.0.0",
   "scripts": {
     "backend": "node backend/server.js",
-    "lint": "npm --prefix backend run lint"
+    "lint": "npm --prefix backend run lint",
+    "postinstall": "npx playwright install chromium"
   },
   "dependencies": {
     "concurrently": "^8.2.2",
