@@ -111,9 +111,14 @@ function normalizeProspectRow(row = {}) {
   const first = row.first_name || row.firstName || null
   const last = row.last_name || row.lastName || null
   const name = displayName({ name: row.name, first_name: first, last_name: last })
+  const score = typeof row.score === 'number' ? row.score : 0
+  const owner = row.owner_user_id || row.user_id || null
 
   return {
     ...row,
+    owner_user_id: owner,
+    user_id: row.user_id || owner,
+    score,
     first_name: first,
     last_name: last,
     name,
@@ -521,6 +526,21 @@ async function generateDrafts({ userId }) {
   const candidates = leads
     .map(lead => map.get(lead.prospect_id))
     .filter(Boolean)
+    .filter(p => {
+      const ownerMatches = (p.owner_user_id || p.user_id) === userId
+      const status = typeof p.status === 'string' ? p.status.toLowerCase() : ''
+      const source = typeof p.source === 'string' ? p.source.toLowerCase() : ''
+      const doNotContact = Boolean(p.do_not_contact)
+      const lastContactedMissing = p.last_contacted_at == null
+
+      return (
+        ownerMatches &&
+        status === 'new' &&
+        source === 'linkedin' &&
+        !doNotContact &&
+        lastContactedMissing
+      )
+    })
 
   console.log('SmartDriver[draft_candidates]', {
     candidates_total: candidates.length,
@@ -535,10 +555,12 @@ async function generateDrafts({ userId }) {
     }))
   })
 
+  const candidateIds = new Set(candidates.map(p => p.id))
+
   let drafted = 0
   for (const lead of leads) {
     const p = map.get(lead.prospect_id)
-    if (!p) continue
+    if (!p || !candidateIds.has(p.id)) continue
 
     const name = displayName(p)
 
