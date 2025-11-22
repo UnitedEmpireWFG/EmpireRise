@@ -1,5 +1,5 @@
 // backend/worker/smart_driver.js
-import { supa } from '../db.js'
+import { supa, supaAdmin } from '../db.js'
 import { aiComplete } from '../lib/ai.js'
 import { timePolicy } from '../services/time_windows.js'
 import { fetchViaDriver, normalizeItem } from '../routes/import_linkedin.js'
@@ -11,6 +11,26 @@ const LOCATION_ALLOWLIST = String(process.env.SMART_LOCATION_ALLOWLIST || proces
   .split(',')
   .map(s => s.trim().toLowerCase())
   .filter(Boolean)
+
+const columnCache = new Map()
+
+async function tableHasColumn(table, column) {
+  const key = `${table}.${column}`
+  if (columnCache.has(key)) return columnCache.get(key)
+
+  const { data, error } = await supaAdmin
+    .from('information_schema.columns')
+    .select('column_name')
+    .eq('table_schema', 'public')
+    .eq('table_name', table)
+    .eq('column_name', column)
+    .limit(1)
+
+  const exists = !error && (data || []).length > 0
+  if (error) console.warn('schema:column_check_error', key, error.message)
+  columnCache.set(key, exists)
+  return exists
+}
 
 function nowIso() { return new Date().toISOString() }
 
@@ -50,10 +70,14 @@ async function enrichRegion({ userId, stageId, prospectId, publicId, profileUrl 
   if (!location) return null
 
   const updates = []
-  if (prospectId) updates.push(
+  const [hasProspectRegion, hasStageRegion] = await Promise.all([
+    tableHasColumn('prospects', 'region'),
+    tableHasColumn('li_contacts_stage', 'region')
+  ])
+  if (prospectId && hasProspectRegion) updates.push(
     supa.from('prospects').update({ region: location }).eq('id', prospectId)
   )
-  if (stageId) updates.push(
+  if (stageId && hasStageRegion) updates.push(
     supa.from('li_contacts_stage').update({ region: location }).eq('id', stageId)
   )
 
@@ -159,9 +183,15 @@ async function popStagedRows(userId) {
   const msg = rpcError.message || ''
   console.warn('smart_driver:pullProspects rpc_error', msg)
 
+  const includeRegion = await tableHasColumn('li_contacts_stage', 'region')
+  const stageColumns = [
+    'id', 'user_id', 'name', 'headline', 'company', 'title', 'public_id', 'profile_url', 'created_at'
+  ]
+  if (includeRegion) stageColumns.splice(6, 0, 'region')
+
   const { data, error: fallbackError } = await supa
     .from('li_contacts_stage')
-    .select('id,user_id,name,headline,company,title,region,public_id,profile_url,created_at')
+    .select(stageColumns.join(','))
     .eq('user_id', userId)
     .is('processed_at', null)
     .order('created_at', { ascending: true })
@@ -208,22 +238,27 @@ async function stageFromDriver({ userId }) {
     if (existingError) throw new Error('stageFromDriver.lookup_error ' + existingError.message)
 
     const existingSet = new Set((existing || []).map(r => r.fingerprint))
+    const stageHasRegion = await tableHasColumn('li_contacts_stage', 'region')
     const payload = rows
       .filter(r => !existingSet.has(r.fingerprint))
-      .map(r => ({
-        user_id: userId,
-        fingerprint: r.fingerprint,
-        public_id: r.public_id,
-        profile_url: r.profile_url,
-        name: r.name,
-        headline: r.headline,
-        company: r.company,
-        title: r.title,
-        region: r.region,
-        raw: r.raw,
-        created_at: nowIso(),
-        processed_at: null
-      }))
+      .map(r => {
+        const base = {
+          user_id: userId,
+          fingerprint: r.fingerprint,
+          public_id: r.public_id,
+          profile_url: r.profile_url,
+          name: r.name,
+          headline: r.headline,
+          company: r.company,
+          title: r.title,
+          raw: r.raw,
+          created_at: nowIso(),
+          processed_at: null
+        }
+
+        if (stageHasRegion) base.region = r.region || null
+        return base
+      })
 
     if (!payload.length) return { staged: 0, fetched: fetched?.length || 0, duplicates: existingSet.size }
 
@@ -255,6 +290,7 @@ async function pullProspects({ userId }) {
   if (!staged?.length) return { pulled: 0 }
 
   let pulled = 0
+  const prospectsHasRegion = await tableHasColumn('prospects', 'region')
   for (const c of staged) {
     // skip if already a prospect
     const filters = []
@@ -278,20 +314,23 @@ async function pullProspects({ userId }) {
       headline: c.headline || null,
       company: c.company || null,
       title: c.title || null,
-      region: c.region || null,
       public_id: c.public_id || null,            // vanity id
       profile_url: c.profile_url || null,
       source: 'linkedin',
       created_at: nowIso()
     }
 
-    if (!insert.region && (insert.public_id || insert.profile_url)) {
-      insert.region = await enrichRegion({
-        userId,
-        stageId: c.id,
-        publicId: insert.public_id,
-        profileUrl: insert.profile_url
-      }) || null
+    if (prospectsHasRegion) {
+      insert.region = c.region || null
+
+      if (!insert.region && (insert.public_id || insert.profile_url)) {
+        insert.region = await enrichRegion({
+          userId,
+          stageId: c.id,
+          publicId: insert.public_id,
+          profileUrl: insert.profile_url
+        }) || null
+      }
     }
 
     const { error: eIns } = await supa.from('prospects').insert(insert)
