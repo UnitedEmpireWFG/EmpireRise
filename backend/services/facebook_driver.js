@@ -13,7 +13,8 @@ export class FacebookDriver {
     this.slowMo  = num(process.env.FB_SLOW_MO_MS, 0)
   }
   async launch() {
-    this.browser = await chromium.launch({ headless: !this.headful, slowMo: this.slowMo })
+    console.log('Playwright launching with default Chromium')
+    this.browser = await chromium.launch({ headless: true })
     this.context = await this.browser.newContext({ viewport: { width: 1420, height: 900 } })
     this.page = await this.context.newPage()
   }

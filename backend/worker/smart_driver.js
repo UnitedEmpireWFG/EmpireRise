@@ -19,7 +19,8 @@ async function tableHasColumn(table, column) {
   if (columnCache.has(key)) return columnCache.get(key)
 
   const { data, error } = await supaAdmin
-    .from('information_schema.columns')
+    .schema('information_schema')
+    .from('columns')
     .select('column_name')
     .eq('table_schema', 'public')
     .eq('table_name', table)
@@ -569,7 +570,6 @@ async function generateDrafts({ userId }) {
 
   const candidateIds = new Set(finalists.map(p => p.id))
 
-  const draftedProspects = []
   let drafted = 0
   for (const lead of leads) {
     const p = map.get(lead.prospect_id)
@@ -625,43 +625,53 @@ Message:
     try { body = (await aiComplete(prompt)).trim() } catch (_) {}
 
     // Insert draft → create approval row for UI review
-    const { data: dIns, error: eD } = await supa.from('drafts').insert({
-      user_id: userId,
-      prospect_id: p.id,
-      platform: 'linkedin',
-      body,
-      status: 'pending',
-      created_at: nowIso()
-    }).select('id').single()
-    if (eD) continue
-
-    await supa.from('approvals').insert({
-      user_id: userId,
-      draft_id: dIns.id,
-      status: 'pending',
-      created_at: nowIso()
-    })
-
-    // If within work window, also enqueue for sending (status=scheduled) so it appears in Queue tab
-    if (withinWorkWindow()) {
-      await supa.from('queue').insert({
+    try {
+      const { data: dIns, error: eD } = await supa.from('drafts').insert({
         user_id: userId,
         prospect_id: p.id,
         platform: 'linkedin',
         body,
-        status: 'scheduled',
-        scheduled_at: nowIso(),
-        created_at: nowIso(),
-        draft_id: dIns.id,
-        preview: body.slice(0, 120)
-      })
-    }
+        status: 'pending',
+        created_at: nowIso()
+      }).select('id').single()
+      if (eD) throw eD
 
-    drafted++
-    draftedProspects.push(p.id)
+      const { error: eApproval } = await supa.from('approvals').insert({
+        user_id: userId,
+        draft_id: dIns.id,
+        status: 'pending',
+        created_at: nowIso()
+      })
+      if (eApproval) throw eApproval
+
+      // If within work window, also enqueue for sending (status=scheduled) so it appears in Queue tab
+      if (withinWorkWindow()) {
+        const { error: eQueue } = await supa.from('queue').insert({
+          user_id: userId,
+          prospect_id: p.id,
+          platform: 'linkedin',
+          body,
+          status: 'scheduled',
+          scheduled_at: nowIso(),
+          created_at: nowIso(),
+          draft_id: dIns.id,
+          preview: body.slice(0, 120)
+        })
+        if (eQueue) throw eQueue
+      }
+
+      drafted++
+    } catch (err) {
+      console.error('SmartDriver[draft_error]', {
+        message: err?.message,
+        code: err?.code,
+        detail: err
+      })
+      throw err
+    }
   }
 
-  console.log('SmartDriver[draft_finalists]', { drafted_count: draftedProspects.length })
+  console.log('SmartDriver[draft_finalists]', { drafted_count: drafted })
   return { drafted }
 }
 

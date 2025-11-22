@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: empire-rise-backend
+    env: node
+    buildCommand: |
+      cd backend
+      npm install
+      npx playwright install chromium
+    startCommand: cd backend && npm run start
