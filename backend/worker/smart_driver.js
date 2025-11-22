@@ -527,10 +527,10 @@ async function generateDrafts({ userId }) {
     .map(lead => map.get(lead.prospect_id))
     .filter(Boolean)
     .filter(p => {
-      const ownerMatches = (p.owner_user_id || p.user_id) === userId
+      const ownerMatches = p.owner_user_id === userId
       const status = typeof p.status === 'string' ? p.status.toLowerCase() : ''
       const source = typeof p.source === 'string' ? p.source.toLowerCase() : ''
-      const doNotContact = Boolean(p.do_not_contact)
+      const doNotContact = p.do_not_contact === true
       const lastContactedMissing = p.last_contacted_at == null
 
       return (
@@ -557,6 +557,7 @@ async function generateDrafts({ userId }) {
 
   const candidateIds = new Set(candidates.map(p => p.id))
 
+  const draftedProspects = []
   let drafted = 0
   for (const lead of leads) {
     const p = map.get(lead.prospect_id)
@@ -645,7 +646,10 @@ Message:
     }
 
     drafted++
+    draftedProspects.push(p.id)
   }
+
+  console.log('SmartDriver[draft_finalists]', { drafted_count: draftedProspects.length })
   return { drafted }
 }
 
