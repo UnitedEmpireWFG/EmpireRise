@@ -419,6 +419,7 @@ async function scoreLeads({ userId }) {
   // Very simple heuristic → score prospects into leads if they match your region or title keywords
   // Extend this as you like.
   const prospects = await selectProspectsForUser({ userId, limit: BATCH })
+  const prospectsHasScore = await tableHasColumn('prospects', 'score')
 
   let scored = 0
   for (const p of (prospects || [])) {
@@ -441,6 +442,14 @@ async function scoreLeads({ userId }) {
     if (t.includes('marketing') || t.includes('growth') || t.includes('sales')) score += 20
     const regionText = (region || '').toLowerCase()
     if (regionText.includes('alberta') || regionText.includes('ontario')) score += 10
+
+    if (prospectsHasScore && p.score !== score) {
+      const { error: prospectUpdateError } = await supa
+        .from('prospects')
+        .update({ score, updated_at: nowIso() })
+        .eq('id', p.id)
+      if (prospectUpdateError) throw new Error('scoreLeads.prospect_update_error ' + prospectUpdateError.message)
+    }
 
     // upsert to leads
     const { data: leadRow } = await supa
