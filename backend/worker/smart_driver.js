@@ -15,6 +15,9 @@ const LOCATION_ALLOWLIST = String(process.env.SMART_LOCATION_ALLOWLIST || proces
 const columnCache = new Map()
 
 async function tableHasColumn(table, column) {
+  // Skip schema checks for prospects.updated_at to avoid cached schema issues
+  if (table === 'prospects' && column === 'updated_at') return true
+
   const key = `${table}.${column}`
   if (columnCache.has(key)) return columnCache.get(key)
 
@@ -454,7 +457,7 @@ async function scoreLeads({ userId }) {
     if (prospectsHasScore && p.score !== score) {
       const { error: prospectUpdateError } = await supa
         .from('prospects')
-        .update({ score, updated_at: nowIso() })
+        .update({ score })
         .eq('id', p.id)
       if (prospectUpdateError) {
         console.error('scoreLeads.prospect_update_error', {
