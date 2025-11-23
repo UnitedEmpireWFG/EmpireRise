@@ -5,5 +5,5 @@ services:
     buildCommand: |
       cd backend
       npm install
-      npm run postinstall || npx playwright install chromium
+      npm run postinstall || npx playwright install
     startCommand: cd backend && npm run start
