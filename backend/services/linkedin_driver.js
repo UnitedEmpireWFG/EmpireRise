@@ -1,4 +1,4 @@
-import { chromium } from 'playwright'
+import { chromium } from "playwright"
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { normalize, looksCanadian, notInExcluded } from '../services/filters/smart_canada.js'
@@ -31,7 +31,8 @@ export class LinkedInDriver {
 
   async launch() {
     console.log('Playwright launching with default Chromium')
-    this.browser = await chromium.launch({ headless: true })
+    const browser = await chromium.launch({ headless: true })
+    this.browser = browser
     this.context = await this.browser.newContext({ viewport: { width: 1420, height: 900 } })
     this.page = await this.context.newPage()
   }
