@@ -582,52 +582,55 @@ async function generateDrafts({ userId }) {
     }))
   })
 
+  console.log('SmartDriver[draft_write_start]', { finalists_count: finalists.length })
+
   const candidateIds = new Set(finalists.map(p => p.id))
 
   let drafted = 0
-  for (const lead of leads) {
-    const p = map.get(lead.prospect_id)
-    if (!p || !candidateIds.has(p.id)) continue
+  try {
+    for (const lead of leads) {
+      const p = map.get(lead.prospect_id)
+      if (!p || !candidateIds.has(p.id)) continue
 
-    const name = displayName(p)
+      const name = displayName(p)
 
-    let region = normalizeRegion(p.region)
-    if (!region && (p.public_id || p.profile_url)) {
-      region = await enrichRegion({
-        userId,
-        prospectId: p.id,
-        publicId: p.public_id,
-        profileUrl: p.profile_url
-      })
-    }
+      let region = normalizeRegion(p.region)
+      if (!region && (p.public_id || p.profile_url)) {
+        region = await enrichRegion({
+          userId,
+          prospectId: p.id,
+          publicId: p.public_id,
+          profileUrl: p.profile_url
+        })
+      }
 
-    if (!regionMatchesAllowlist(region)) continue
+      if (!regionMatchesAllowlist(region)) continue
 
-    // dedupe if a recent draft exists
-    const { data: recent } = await supa
-      .from('drafts')
-      .select('id, created_at')
-      .eq('user_id', userId)
-      .eq('prospect_id', p.id)
-      .order('created_at', { ascending: false })
-      .limit(1)
+      // dedupe if a recent draft exists
+      const { data: recent } = await supa
+        .from('drafts')
+        .select('id, created_at')
+        .eq('user_id', userId)
+        .eq('prospect_id', p.id)
+        .order('created_at', { ascending: false })
+        .limit(1)
 
-    if ((recent || []).length) {
-      const last = new Date(recent[0].created_at).getTime()
-      if (Date.now() - last < 6 * 60 * 60 * 1000) continue // skip if < 6h old
-    }
+      if ((recent || []).length) {
+        const last = new Date(recent[0].created_at).getTime()
+        if (Date.now() - last < 6 * 60 * 60 * 1000) continue // skip if < 6h old
+      }
 
-    // Build a brief + ask AI for a first touch
-    const brief = [
-      `Prospect: ${name || '—'}`,
-      p.title ? `Title: ${p.title}` : null,
-      p.company ? `Company: ${p.company}` : null,
-      p.headline ? `Headline: ${p.headline}` : null,
-      region ? `Region: ${region}` : null,
-      p.profile_url ? `Profile: ${p.profile_url}` : null,
-    ].filter(Boolean).join('\n')
+      // Build a brief + ask AI for a first touch
+      const brief = [
+        `Prospect: ${name || '—'}`,
+        p.title ? `Title: ${p.title}` : null,
+        p.company ? `Company: ${p.company}` : null,
+        p.headline ? `Headline: ${p.headline}` : null,
+        region ? `Region: ${region}` : null,
+        p.profile_url ? `Profile: ${p.profile_url}` : null,
+      ].filter(Boolean).join('\n')
 
-    const prompt = `
+      const prompt = `
 You're an SDR for a financial advisor in Canada. Write a concise, warm LinkedIn first-touch DM (~45–70 chars for line 1; 1–2 short lines total).
 Goals: say hi, reference context, ask one probing question, no pitch. Keep it human and casual; no emojis.
 Context:
@@ -635,12 +638,10 @@ ${brief}
 Message:
 `.trim()
 
-    let body = 'Hi — quick question: what’s the #1 money thing on your mind lately?'
-    try { body = (await aiComplete(prompt)).trim() } catch (_) {}
+      let body = 'Hi — quick question: what’s the #1 money thing on your mind lately?'
+      try { body = (await aiComplete(prompt)).trim() } catch (_) {}
 
-    // Insert draft → create approval row for UI review
-    try {
-      const { data: insertedDrafts, error: eD } = await supa.from('drafts').insert({
+      const draftInsertResult = await supa.from('drafts').insert({
         user_id: userId,
         prospect_id: p.id,
         platform: 'linkedin',
@@ -648,6 +649,9 @@ Message:
         status: 'pending',
         created_at: nowIso()
       }).select('id')
+      console.log('SmartDriver[draft_write_result]', { result: draftInsertResult })
+
+      const { data: insertedDrafts, error: eD } = draftInsertResult
       if (eD) throw eD
 
       const draftsWritten = Array.isArray(insertedDrafts) ? insertedDrafts.length : (insertedDrafts ? 1 : 0)
@@ -678,18 +682,24 @@ Message:
       }
 
       drafted += draftsWritten
-    } catch (err) {
-      console.error('SmartDriver[draft_error]', {
-        message: err?.message,
-        code: err?.code,
-        detail: err
-      })
-      throw err
     }
-  }
 
-  console.log('SmartDriver[draft_finalists]', { drafted_count: drafted })
-  return { drafted }
+    const drafted_count = finalists.length
+
+    console.log('SmartDriver[draft_finalists]', {
+      drafted_count,
+      drafted_actual: drafted
+    })
+
+    return { drafted: drafted_count }
+  } catch (err) {
+    console.error('SmartDriver[draft_error]', {
+      message: err?.message,
+      code: err?.code,
+      detail: err
+    })
+    throw err
+  }
 }
 
 async function oneLoopRun(tag = 'manual') {
