@@ -3,23 +3,23 @@ import express from 'express'
 import multer from 'multer'
 import fs from 'fs'
 import path from 'path'
+import { getLinkedInCookiePath } from '../utils/linkedin_cookies.js'
 
 const router = express.Router()
 
-// Where we store cookies on the API host
-const BASE_DIR = '/opt/render/project/.data/li_cookies'
-
 async function saveLinkedInCookiesToDisk(userId, cookies) {
-  const dir = BASE_DIR
-  const filePath = path.join(dir, `${userId}.json`)
+  const filePath = getLinkedInCookiePath(userId)
+  const dir = path.dirname(filePath)
 
   await fs.promises.mkdir(dir, { recursive: true })
 
+  const tmpPath = `${filePath}.tmp`
   await fs.promises.writeFile(
-    filePath,
+    tmpPath,
     JSON.stringify(cookies, null, 2),
     'utf8'
   )
+  await fs.promises.rename(tmpPath, filePath)
 
   console.log('li_cookies_stored', {
     userId,
@@ -40,33 +40,50 @@ router.post('/', upload.single('file'), async (req, res) => {
     const userId = req.user?.id || req.user?.sub || null
     if (!userId) return res.status(401).json({ ok: false, error: 'unauthorized' })
 
-    // validate file present
-    if (!req.file || !req.file.buffer) {
-      return res.status(400).json({ ok: false, error: 'missing_file' })
+    let cookies = []
+
+    if (req.file?.buffer) {
+      try { cookies = JSON.parse(req.file.buffer.toString('utf-8')) }
+      catch { return res.status(400).json({ ok: false, error: 'invalid_json' }) }
+    } else if (Array.isArray(req.body)) {
+      cookies = req.body
+    } else if (Array.isArray(req.body?.cookies)) {
+      cookies = req.body.cookies
     }
 
-    // validate JSON array of cookies with name+value
-    let json
-    try { json = JSON.parse(req.file.buffer.toString('utf-8')) }
-    catch { return res.status(400).json({ ok: false, error: 'invalid_json' }) }
-
-    if (!Array.isArray(json)) {
+    if (!Array.isArray(cookies)) {
       return res.status(400).json({ ok: false, error: 'expected_array_of_cookies' })
     }
-    const ok = json.every(c => typeof c?.name === 'string' && typeof c?.value === 'string')
+
+    const ok = cookies.every(c => typeof c?.name === 'string' && typeof c?.value === 'string')
     if (!ok) {
       return res.status(400).json({ ok: false, error: 'cookies_missing_name_or_value' })
     }
 
     // normalize domains — ensure .linkedin.com default
-    const normalized = json.map(c => ({
+    const normalized = cookies.map(c => ({
       ...c,
       domain: c.domain?.startsWith('.') ? c.domain : (c.domain || '.linkedin.com')
     }))
 
-    await saveLinkedInCookiesToDisk(userId, normalized)
+    const hasAuthCookie = normalized.some(c => c.name === 'li_at' || c.name === 'li_rm')
+    if (!hasAuthCookie) {
+      console.log('li_cookies_missing_auth', {
+        userId,
+        cookieCount: normalized.length,
+        cookieNames: normalized.map(c => c.name)
+      })
+      return res.status(400).json({ ok: false, error: 'linkedin_auth_cookies_missing' })
+    }
 
-    const savedPath = path.join(BASE_DIR, `${userId}.json`)
+    try {
+      await saveLinkedInCookiesToDisk(userId, normalized)
+    } catch (err) {
+      console.error('li_cookies_store_result', { userId, result: 'error', error: err?.message })
+      return res.status(500).json({ ok: false, error: 'failed_to_save_cookies' })
+    }
+
+    const savedPath = getLinkedInCookiePath(userId)
 
     console.log('li_cookies_store_result', { userId, result: 'saved_to_disk', path: savedPath })
 

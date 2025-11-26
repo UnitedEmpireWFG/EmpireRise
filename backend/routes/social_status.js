@@ -1,14 +1,12 @@
 import express from 'express'
 import fs from 'fs'
-import path from 'path'
 import { supa, supaAdmin } from '../db.js'
+import { getLinkedInCookiePath } from '../utils/linkedin_cookies.js'
 
 const router = express.Router()
-const LI_COOKIES_BASE_DIR = '/opt/render/project/.data/li_cookies'
-
 function hasLinkedInCookies(userId) {
   try {
-    const cookiesPath = path.join(LI_COOKIES_BASE_DIR, `${userId}.json`)
+    const cookiesPath = getLinkedInCookiePath(userId)
     return fs.existsSync(cookiesPath)
   } catch (err) {
     console.error('social_status_li_cookies_check_error', {

@@ -1,12 +1,11 @@
 import { Router } from 'express'
 import { createHash } from 'node:crypto'
 import fs from 'fs'
-import path from 'path'
 import { supa } from '../db.js'
+import { getLinkedInCookiePath } from '../utils/linkedin_cookies.js'
 
 const router = Router()
 const TABLE = 'li_contacts_stage'
-const BASE_DIR = '/opt/render/project/.data/li_cookies'
 const MAX_PAYLOAD = 2000
 
 let driverModule = null
@@ -23,31 +22,35 @@ export async function loadDriverModule() {
   }
 }
 
-async function loadCookiesMeta(userId) {
-  const cookiesPath = path.join(BASE_DIR, `${userId}.json`)
+export async function loadCookiesMeta(userId) {
+  const cookiesPath = getLinkedInCookiePath(userId)
+  console.log('li_cookies_load_attempt', { userId, cookiesPath })
   try {
     const buf = await fs.promises.readFile(cookiesPath, 'utf-8')
     const parsed = JSON.parse(buf)
-    const cookiesLength = Array.isArray(parsed) ? parsed.length : 0
-    return { exists: true, cookiesLength, cookiesPath }
+    const cookies = Array.isArray(parsed) ? parsed : []
+    console.log('li_cookies_load_result', { userId, cookies_length: cookies.length, exists: true })
+    return { exists: true, cookiesLength: cookies.length, cookiesPath, cookies }
   } catch (e) {
+    if (e?.code === 'ENOENT') {
+      console.log('li_cookies_load_result', { userId, cookies_length: 0, exists: false })
+      return { exists: false, cookiesLength: 0, cookiesPath, cookies: [] }
+    }
     console.error('li_cookies_load_error', { userId, error: e })
-    return { exists: false, cookiesLength: 0, cookiesPath }
+    throw e
   }
 }
 
 export async function fetchViaDriver({ userId, limit, flavor }) {
   if (!userId) return []
   const cookiesMeta = await loadCookiesMeta(userId)
-  console.log('li_cookies_load_attempt', { userId, cookiesPath: cookiesMeta.cookiesPath })
-  console.log('li_cookies_load_result', { userId, cookies_length: cookiesMeta.cookiesLength, exists: cookiesMeta.exists })
 
   if (!cookiesMeta.exists || cookiesMeta.cookiesLength === 0) {
     if (cookiesMeta.exists && cookiesMeta.cookiesLength === 0) {
       console.log('li_import_empty_cookies', { userId, cookiesPath: cookiesMeta.cookiesPath })
     }
     if (!cookiesMeta.exists) {
-      console.log('li_import_no_cookies', userId)
+      console.log('li_import_no_cookies', { userId, cookiesPath: cookiesMeta.cookiesPath })
     }
     return []
   }
