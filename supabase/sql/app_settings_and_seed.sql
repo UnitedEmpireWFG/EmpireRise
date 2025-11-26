@@ -15,6 +15,37 @@ create table if not exists public.app_settings (
   last_li_seed_at timestamptz
 );
 
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.tables
+    where table_schema = 'public'
+      and table_name = 'app_settings'
+  ) then
+    if not exists (
+      select 1
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'app_settings'
+        and column_name = 'status'
+    ) then
+      alter table public.app_settings add column status text;
+    end if;
+
+    if exists (
+      select 1
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'app_settings'
+        and column_name = 'status'
+    ) then
+      execute 'update public.app_settings set status = ''active'' where status is null';
+
+      execute 'alter table public.app_settings alter column status set default ''active''';
+    end if;
+  end if;
+end $$ language plpgsql;
 alter table if exists public.app_settings add column if not exists status text default 'active';
 
 do $$
