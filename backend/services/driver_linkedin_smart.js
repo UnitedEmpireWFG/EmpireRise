@@ -78,6 +78,15 @@ export class LinkedInSmart {
     } catch { return false }
   }
 
+  hasValidAuthCookies() {
+    const cookies = this.cookies || []
+    const names = new Set(cookies.map(c => c.name))
+    const hasLiAt = names.has("li_at")
+    const hasJsess = names.has("JSESSIONID") || names.has("jsessionid")
+    // You can adjust this rule later, but for now require li_at.
+    return hasLiAt || hasJsess
+  }
+
   async init() {
     if (this.ready) return
     if (!this.browser) await this.launch()
@@ -89,6 +98,12 @@ export class LinkedInSmart {
         ...c,
         domain: c.domain?.startsWith('.') ? c.domain : (c.domain || '.linkedin.com')
       }))
+      this.cookies = normalizedCookies
+      console.log("li_auth_cookies_debug", {
+        userId: this.userId,
+        cookieCount: this.cookies?.length || 0,
+        cookieNames: (this.cookies || []).map(c => c.name).sort(),
+      })
       console.log('li_import_driver_cookies_normalized_sample', normalizedCookies[0])
       try {
         await this.context.addCookies(normalizedCookies)
@@ -107,6 +122,12 @@ export class LinkedInSmart {
         ...c,
         domain: c.domain?.startsWith('.') ? c.domain : (c.domain || '.linkedin.com')
       }))
+      this.cookies = normalizedCookies
+      console.log("li_auth_cookies_debug", {
+        userId: this.userId,
+        cookieCount: this.cookies?.length || 0,
+        cookieNames: (this.cookies || []).map(c => c.name).sort(),
+      })
       console.log('li_import_driver_cookies_normalized_sample', normalizedCookies[0])
       try {
         await this.context.addCookies(normalizedCookies)
@@ -118,7 +139,17 @@ export class LinkedInSmart {
       if (await this._isLoggedIn()) { this.ready = true; return }
     }
 
-    throw new Error('linkedin_auth_missing')
+    const hasAuth = this.hasValidAuthCookies()
+    if (!hasAuth) {
+      console.error("li_auth_missing_detail", {
+        userId: this.userId,
+        cookieCount: this.cookies?.length || 0,
+        cookieNames: (this.cookies || []).map(c => c.name).sort(),
+      })
+      const err = new Error("linkedin_auth_missing")
+      err.code = "linkedin_auth_missing"
+      throw err
+    }
   }
 
   async _extractProfileMetaFromCard(card) {
