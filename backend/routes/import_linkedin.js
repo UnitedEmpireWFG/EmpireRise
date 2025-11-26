@@ -1,12 +1,12 @@
 import { Router } from 'express'
 import { createHash } from 'node:crypto'
-import fs from 'node:fs/promises'
-import path from 'node:path'
+import fs from 'fs'
+import path from 'path'
 import { supa } from '../db.js'
 
 const router = Router()
 const TABLE = 'li_contacts_stage'
-const COOKIES_DIR = process.env.LI_COOKIES_DIR || '/opt/render/project/.data/li_cookies'
+const BASE_DIR = '/opt/render/project/.data/li_cookies'
 const MAX_PAYLOAD = 2000
 
 let driverModule = null
@@ -24,16 +24,14 @@ export async function loadDriverModule() {
 }
 
 async function loadCookiesMeta(userId) {
-  const cookiesPath = path.join(COOKIES_DIR, `${userId}.json`)
+  const cookiesPath = path.join(BASE_DIR, `${userId}.json`)
   try {
-    const buf = await fs.readFile(cookiesPath, 'utf-8')
+    const buf = await fs.promises.readFile(cookiesPath, 'utf-8')
     const parsed = JSON.parse(buf)
     const cookiesLength = Array.isArray(parsed) ? parsed.length : 0
     return { exists: true, cookiesLength, cookiesPath }
   } catch (e) {
-    if (e?.code !== 'ENOENT') {
-      console.log('li_import_cookies_read_error', { userId, cookiesPath, message: e?.message })
-    }
+    console.error('li_cookies_load_error', { userId, error: e })
     return { exists: false, cookiesLength: 0, cookiesPath }
   }
 }
