@@ -54,12 +54,32 @@ export class LinkedInSmart {
     this.userId = opts.userId || null
   }
 
-  async launch() {
-    console.log('Playwright launching with default Chromium')
-    const browser = await chromium.launch({ headless: true })
-    this.browser = browser
-    this.context = await this.browser.newContext({ viewport: { width: 1420, height: 900 } })
-    this.page = await this.context.newPage()
+  async ensureBrowser() {
+    if (this.browser) return
+    console.log('li_driver_browser_launch', { pid: process.pid })
+    this.browser = await chromium.launch({ headless: true })
+  }
+
+  async _withSession(run) {
+    await this.ensureBrowser()
+    let context = null
+    let page = null
+    const prevContext = this.context
+    const prevPage = this.page
+    this.ready = false
+    try {
+      context = await this.browser.newContext({ viewport: { width: 1420, height: 900 } })
+      page = await context.newPage()
+      this.context = context
+      this.page = page
+      await this.init()
+      return await run()
+    } finally {
+      this.ready = false
+      this.context = prevContext
+      this.page = prevPage
+      try { await context?.close() } catch {}
+    }
   }
 
   async _cookiesFromPath(overridePath) {
@@ -85,7 +105,7 @@ export class LinkedInSmart {
 
   async init() {
     if (this.ready) return
-    if (!this.browser) await this.launch()
+    if (!this.browser) await this.ensureBrowser()
 
     // Try per-user cookies first
     const candidates = []
@@ -180,49 +200,50 @@ export class LinkedInSmart {
   }
 
   async suggestedPeopleCanada(limit = 50) {
-    await this.init()
-    const excludeCSV = process.env.LI_EXCLUDE_TERMS || ''
-    const preferOTW = bool(process.env.LI_PREFER_OPEN_TO_WORK, true)
+    return this._withSession(async () => {
+      const excludeCSV = process.env.LI_EXCLUDE_TERMS || ''
+      const preferOTW = bool(process.env.LI_PREFER_OPEN_TO_WORK, true)
 
-    const out = []
-    const seenHandles = new Set()
+      const out = []
+      const seenHandles = new Set()
 
-    let haveSuggestions = false
-    for (const url of SUGGESTED_URLS) {
-      await this.page.goto(url, { waitUntil: 'domcontentloaded' }).catch(() => {})
-      for (const sel of CARD_SELECTORS) {
-        const ready = await this.page.locator(sel).first().waitFor({ timeout: 5000 }).then(() => true).catch(() => false)
-        if (ready) { haveSuggestions = true; break }
+      let haveSuggestions = false
+      for (const url of SUGGESTED_URLS) {
+        await this.page.goto(url, { waitUntil: 'domcontentloaded' }).catch(() => {})
+        for (const sel of CARD_SELECTORS) {
+          const ready = await this.page.locator(sel).first().waitFor({ timeout: 5000 }).then(() => true).catch(() => false)
+          if (ready) { haveSuggestions = true; break }
+        }
+        if (haveSuggestions) break
       }
-      if (haveSuggestions) break
-    }
-    if (!haveSuggestions) throw new Error('linkedin_suggestions_not_found')
+      if (!haveSuggestions) throw new Error('linkedin_suggestions_not_found')
 
-    for (let scroll=0; scroll<12 && out.length < limit; scroll++) {
-      const cards = await this.page.locator(CARD_SELECTORS.join(', ')).all()
-      for (const card of cards) {
-        const meta = await this._extractProfileMetaFromCard(card)
-        if (!meta.handle) continue
-        if (seenHandles.has(meta.handle)) continue
+      for (let scroll=0; scroll<12 && out.length < limit; scroll++) {
+        const cards = await this.page.locator(CARD_SELECTORS.join(', ')).all()
+        for (const card of cards) {
+          const meta = await this._extractProfileMetaFromCard(card)
+          if (!meta.handle) continue
+          if (seenHandles.has(meta.handle)) continue
 
-        const canadian = looksCanadian({ locationText: meta.location })
-        const clean    = notInExcluded([meta.headline, meta.location].join(' | '), excludeCSV)
+          const canadian = looksCanadian({ locationText: meta.location })
+          const clean    = notInExcluded([meta.headline, meta.location].join(' | '), excludeCSV)
 
-        if (!canadian || !clean) continue
-        seenHandles.add(meta.handle)
-        out.push(meta)
-        if (out.length >= limit) break
+          if (!canadian || !clean) continue
+          seenHandles.add(meta.handle)
+          out.push(meta)
+          if (out.length >= limit) break
+        }
+
+        await this.page.keyboard.press('End').catch(()=>{})
+        await wait(1500)
       }
 
-      await this.page.keyboard.press('End').catch(()=>{})
-      await wait(1500)
-    }
-
-    if (preferOTW) {
-      out.sort((a,b) => (b.open_to_work === true) - (a.open_to_work === true))
-    }
-    const seen = new Set()
-    return out.filter(x => !seen.has(x.handle) && seen.add(x.handle))
+      if (preferOTW) {
+        out.sort((a,b) => (b.open_to_work === true) - (a.open_to_work === true))
+      }
+      const seen = new Set()
+      return out.filter(x => !seen.has(x.handle) && seen.add(x.handle))
+    })
   }
 
   async _firstText(card, selectors = []) {
@@ -264,33 +285,35 @@ export class LinkedInSmart {
   }
 
   async connectWithOptionalNote(handle, note) {
-    const state = await this._prepareProfile(handle)
-    if (state.status === 'already_connected' || state.status === 'pending') {
-      return { ok: true, status: state.status, requestId: null }
-    }
+    return this._withSession(async () => {
+      const state = await this._prepareProfile(handle)
+      if (state.status === 'already_connected' || state.status === 'pending') {
+        return { ok: true, status: state.status, requestId: null }
+      }
 
-    const trimmed = String(note || '').trim()
-    if (trimmed) {
-      const addNote = this.page.locator('button:has-text("Add a note")').first()
-      if (!(await addNote.count())) throw new Error('add_note_button_not_found')
-      await addNote.click().catch(() => {})
-      await wait(400)
+      const trimmed = String(note || '').trim()
+      if (trimmed) {
+        const addNote = this.page.locator('button:has-text("Add a note")').first()
+        if (!(await addNote.count())) throw new Error('add_note_button_not_found')
+        await addNote.click().catch(() => {})
+        await wait(400)
 
-      const textarea = this.page.locator('textarea[name="message"], textarea#custom-message')
-      if (!(await textarea.count())) throw new Error('note_textarea_not_found')
-      await textarea.fill(trimmed)
-      await wait(200)
+        const textarea = this.page.locator('textarea[name="message"], textarea#custom-message')
+        if (!(await textarea.count())) throw new Error('note_textarea_not_found')
+        await textarea.fill(trimmed)
+        await wait(200)
+
+        const send = this.page.locator('button:has-text("Send")').last()
+        await send.click().catch(() => {})
+        await wait(800)
+        return { ok: true, status: 'sent_with_note', requestId: `li_conn_${Date.now()}` }
+      }
 
       const send = this.page.locator('button:has-text("Send")').last()
       await send.click().catch(() => {})
       await wait(800)
-      return { ok: true, status: 'sent_with_note', requestId: `li_conn_${Date.now()}` }
-    }
-
-    const send = this.page.locator('button:has-text("Send")').last()
-    await send.click().catch(() => {})
-    await wait(800)
-    return { ok: true, status: 'sent', requestId: `li_conn_${Date.now()}` }
+      return { ok: true, status: 'sent', requestId: `li_conn_${Date.now()}` }
+    })
   }
 
   async connectNoNote(handle) {
@@ -298,39 +321,49 @@ export class LinkedInSmart {
   }
 
   async profileLocation(handle) {
-    await this.init()
-    const h = String(handle || '').replace(/^@/, '')
-    if (!h) throw new Error('missing_handle')
+    return this._withSession(async () => {
+      const h = String(handle || '').replace(/^@/, '')
+      if (!h) throw new Error('missing_handle')
 
-    await this.page.goto(`https://www.linkedin.com/in/${encodeURIComponent(h)}/`, { waitUntil: 'domcontentloaded' })
-    await wait(900)
+      await this.page.goto(`https://www.linkedin.com/in/${encodeURIComponent(h)}/`, { waitUntil: 'domcontentloaded' })
+      await wait(900)
 
-    const selectors = [
-      '.pv-text-details__left-panel div.text-body-small.inline',
-      'div.text-body-small.inline.t-black--light.break-words',
-      '[data-test-id="location"]',
-      'section.pv-contact-info__contact-type.ci-address .pv-contact-info__ci-container',
-      'main li.t-14.t-normal span[aria-hidden="true"]'
-    ]
+      const selectors = [
+        '.pv-text-details__left-panel div.text-body-small.inline',
+        'div.text-body-small.inline.t-black--light.break-words',
+        '[data-test-id="location"]',
+        'section.pv-contact-info__contact-type.ci-address .pv-contact-info__ci-container',
+        'main li.t-14.t-normal span[aria-hidden="true"]'
+      ]
 
-    const location = await this._firstText(this.page, selectors)
-    return location || null
+      const location = await this._firstText(this.page, selectors)
+      return location || null
+    })
   }
 
   async isConnected(handle) {
-    await this.init()
-    const h = String(handle || '').replace(/^@/,'')
-    await this.page.goto(`https://www.linkedin.com/in/${encodeURIComponent(h)}/`, { waitUntil: 'domcontentloaded' })
-    await wait(800)
-    const msg = this.page.locator('button:has-text("Message")')
-    const pending = this.page.locator('button:has-text("Pending")')
-    return (await msg.count()) > 0 && (await pending.count()) === 0
+    return this._withSession(async () => {
+      const h = String(handle || '').replace(/^@/,'')
+      await this.page.goto(`https://www.linkedin.com/in/${encodeURIComponent(h)}/`, { waitUntil: 'domcontentloaded' })
+      await wait(800)
+      const msg = this.page.locator('button:has-text("Message")')
+      const pending = this.page.locator('button:has-text("Pending")')
+      return (await msg.count()) > 0 && (await pending.count()) === 0
+    })
   }
 
   async close() {
-    try { await this.page?.close() } catch {}
+    await this.shutdown()
+  }
+
+  async shutdown() {
     try { await this.context?.close() } catch {}
     try { await this.browser?.close() } catch {}
+    if (this.browser) console.log('li_driver_browser_closed')
+    this.browser = null
+    this.context = null
+    this.page = null
+    this.ready = false
   }
 }
 

@@ -15,24 +15,27 @@ export async function runDiscoveryLinkedInSmart() {
 
   const cap = Number(process.env.LI_SOURCING_DAILY_CAP || 20)
   const li = new LinkedInSmart()
-  const items = await li.suggestedPeopleCanada(cap * 2)
-  let added = 0
-  for (const m of items) {
-    if (added >= cap) break
-    const row = {
-      platform: 'linkedin',
-      handle: m.handle,
-      first_name: null, last_name: null,
-      headline: m.headline || null,
-      location: m.location || null,
-      open_to_work: !!m.open_to_work,
-      status: 'new'
+  try {
+    const items = await li.suggestedPeopleCanada(cap * 2)
+    let added = 0
+    for (const m of items) {
+      if (added >= cap) break
+      const row = {
+        platform: 'linkedin',
+        handle: m.handle,
+        first_name: null, last_name: null,
+        headline: m.headline || null,
+        location: m.location || null,
+        open_to_work: !!m.open_to_work,
+        status: 'new'
+      }
+      const { error } = await supa.from('candidates').insert(row)
+      if (!error) added++
     }
-    const { error } = await supa.from('candidates').insert(row)
-    if (!error) added++
+    return { ok: true, added }
+  } finally {
+    await li.close().catch(() => {})
   }
-  await li.close().catch(() => {})
-  return { ok: true, added }
 }
 
 export async function runDiscoveryFacebookSmart() {
@@ -92,21 +95,24 @@ export async function runConnectLinkedInSmart() {
   if (!rows?.length) return { ok: true, sent: 0 }
 
   const li = new LinkedInSmart()
-  let sent = 0
-  for (const r of rows) {
-    try {
-      await li.connectNoNote(r.handle) // NO NOTE per your request
-      await supa.from('candidates').update({ status: 'requested' }).eq('id', r.id)
-      await supa.from('connect_log').insert({ platform: 'linkedin', handle: r.handle, action: 'request' })
-      sent++
-      await nap(1800 + Math.random() * 900)
-    } catch (e) {
-      await supa.from('candidates').update({ status: 'error' }).eq('id', r.id)
-      await supa.from('connect_log').insert({ platform: 'linkedin', handle: r.handle, action: 'request', ok: false, error: String(e?.message || e) })
+  try {
+    let sent = 0
+    for (const r of rows) {
+      try {
+        await li.connectNoNote(r.handle) // NO NOTE per your request
+        await supa.from('candidates').update({ status: 'requested' }).eq('id', r.id)
+        await supa.from('connect_log').insert({ platform: 'linkedin', handle: r.handle, action: 'request' })
+        sent++
+        await nap(1800 + Math.random() * 900)
+      } catch (e) {
+        await supa.from('candidates').update({ status: 'error' }).eq('id', r.id)
+        await supa.from('connect_log').insert({ platform: 'linkedin', handle: r.handle, action: 'request', ok: false, error: String(e?.message || e) })
+      }
     }
+    return { ok: true, sent }
+  } finally {
+    await li.close().catch(() => {})
   }
-  await li.close().catch(() => {})
-  return { ok: true, sent }
 }
 
 export async function runConnectFacebookSmart() {
@@ -167,27 +173,30 @@ export async function checkLinkedInAcceptsSmart() {
   if (!rows?.length) return { ok: true, accepted: 0 }
 
   const li = new LinkedInSmart()
-  let accepted = 0
-  for (const r of rows) {
-    try {
-      const ok = await li.isConnected(r.handle)
-      if (ok) {
-        await supa.from('candidates').update({ status: 'connected' }).eq('id', r.id)
-        await supa.from('connect_log').insert({ platform: 'linkedin', handle: r.handle, action: 'accept_detected' })
+  try {
+    let accepted = 0
+    for (const r of rows) {
+      try {
+        const ok = await li.isConnected(r.handle)
+        if (ok) {
+          await supa.from('candidates').update({ status: 'connected' }).eq('id', r.id)
+          await supa.from('connect_log').insert({ platform: 'linkedin', handle: r.handle, action: 'accept_detected' })
 
-        if (timePolicy.canAutoEnqueueNow()) {
-          const qid = await enqueueWarmup('linkedin', r.handle)
-          if (qid) await supa.from('candidates').update({ status: 'queued' }).eq('id', r.id)
-        } else {
-          await supa.from('candidates').update({ next_action: 'enqueue_warmup' }).eq('id', r.id)
+          if (timePolicy.canAutoEnqueueNow()) {
+            const qid = await enqueueWarmup('linkedin', r.handle)
+            if (qid) await supa.from('candidates').update({ status: 'queued' }).eq('id', r.id)
+          } else {
+            await supa.from('candidates').update({ next_action: 'enqueue_warmup' }).eq('id', r.id)
+          }
+          accepted++
         }
-        accepted++
-      }
-      await nap(900 + Math.random() * 500)
-    } catch {}
+        await nap(900 + Math.random() * 500)
+      } catch {}
+    }
+    return { ok: true, accepted }
+  } finally {
+    await li.close().catch(() => {})
   }
-  await li.close().catch(() => {})
-  return { ok: true, accepted }
 }
 
 export async function checkFacebookAcceptsSmart() {
