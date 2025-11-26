@@ -50,7 +50,8 @@ export class LinkedInSmart {
     this.context = null
     this.page = null
     this.ready = false
-    this.opts = opts   // { cookiesPath?: string }
+    this.opts = opts   // { cookiesPath?: string, userId?: string }
+    this.userId = opts.userId || null
   }
 
   async launch() {
@@ -78,13 +79,8 @@ export class LinkedInSmart {
     } catch { return false }
   }
 
-  hasValidAuthCookies() {
-    const cookies = this.cookies || []
-    const names = new Set(cookies.map(c => c.name))
-    const hasLiAt = names.has("li_at")
-    const hasJsess = names.has("JSESSIONID") || names.has("jsessionid")
-    // You can adjust this rule later, but for now require li_at.
-    return hasLiAt || hasJsess
+  _hasAuthCookie(cookies = []) {
+    return cookies.some(c => c?.name === 'li_at' || c?.name === 'li_rm')
   }
 
   async init() {
@@ -92,18 +88,33 @@ export class LinkedInSmart {
     if (!this.browser) await this.launch()
 
     // Try per-user cookies first
+    const candidates = []
     const perUserCookies = await this._cookiesFromPath(this.opts.cookiesPath)
-    if (perUserCookies) {
-      const normalizedCookies = normalizePlaywrightCookies(perUserCookies).map(c => ({
+    if (perUserCookies) candidates.push(perUserCookies)
+
+    const fallbackCookies = await this._cookiesFromPath()
+    if (fallbackCookies) candidates.push(fallbackCookies)
+
+    let sawAuthCookie = false
+
+    for (const rawCookies of candidates) {
+      const normalizedCookies = normalizePlaywrightCookies(rawCookies).map(c => ({
         ...c,
         domain: c.domain?.startsWith('.') ? c.domain : (c.domain || '.linkedin.com')
       }))
-      this.cookies = normalizedCookies
+
+      const hasAuthCookie = this._hasAuthCookie(normalizedCookies)
       console.log("li_auth_cookies_debug", {
         userId: this.userId,
-        cookieCount: this.cookies?.length || 0,
-        cookieNames: (this.cookies || []).map(c => c.name).sort(),
+        cookieCount: normalizedCookies?.length || 0,
+        cookieNames: (normalizedCookies || []).map(c => c.name).sort(),
+        hasAuthCookie,
       })
+
+      if (!hasAuthCookie) continue
+
+      sawAuthCookie = true
+      this.cookies = normalizedCookies
       console.log('li_import_driver_cookies_normalized_sample', normalizedCookies[0])
       try {
         await this.context.addCookies(normalizedCookies)
@@ -115,41 +126,20 @@ export class LinkedInSmart {
       if (await this._isLoggedIn()) { this.ready = true; return }
     }
 
-    // Fallback to global cookies
-    const cookies = await this._cookiesFromPath()
-    if (cookies) {
-      const normalizedCookies = normalizePlaywrightCookies(cookies).map(c => ({
-        ...c,
-        domain: c.domain?.startsWith('.') ? c.domain : (c.domain || '.linkedin.com')
-      }))
-      this.cookies = normalizedCookies
-      console.log("li_auth_cookies_debug", {
-        userId: this.userId,
-        cookieCount: this.cookies?.length || 0,
-        cookieNames: (this.cookies || []).map(c => c.name).sort(),
-      })
-      console.log('li_import_driver_cookies_normalized_sample', normalizedCookies[0])
-      try {
-        await this.context.addCookies(normalizedCookies)
-      } catch (err) {
-        console.error('li_import_driver_run_error', err)
-        throw err
-      }
-      await this.page.goto('https://www.linkedin.com/mynetwork/', { waitUntil: 'domcontentloaded' })
-      if (await this._isLoggedIn()) { this.ready = true; return }
-    }
+    const authError = new Error("linkedin_auth_missing")
+    authError.code = "linkedin_auth_missing"
 
-    const hasAuth = this.hasValidAuthCookies()
-    if (!hasAuth) {
+    if (!sawAuthCookie) {
       console.error("li_auth_missing_detail", {
         userId: this.userId,
         cookieCount: this.cookies?.length || 0,
         cookieNames: (this.cookies || []).map(c => c.name).sort(),
       })
-      const err = new Error("linkedin_auth_missing")
-      err.code = "linkedin_auth_missing"
-      throw err
+      throw authError
     }
+
+    // Auth cookies were present but we still appear logged out.
+    throw authError
   }
 
   async _extractProfileMetaFromCard(card) {

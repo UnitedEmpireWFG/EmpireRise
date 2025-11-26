@@ -1,14 +1,13 @@
 import fs from 'node:fs/promises'
-import path from 'node:path'
 
 import { LinkedInSmart as PlaywrightLinkedInSmart } from '../services/driver_linkedin_smart.js'
+import { getLinkedInCookiePath } from '../utils/linkedin_cookies.js'
 
-const COOKIES_DIR = process.env.LI_COOKIES_DIR || '/opt/render/project/.data/li_cookies'
 const NOTE_MAX_LENGTH = 280
 
 async function cookiePathFor(userId) {
   if (!userId) throw new Error('missing_user')
-  const perUserPath = path.join(COOKIES_DIR, `${userId}.json`)
+  const perUserPath = getLinkedInCookiePath(userId)
   try {
     await fs.access(perUserPath)
     return perUserPath
@@ -31,7 +30,7 @@ async function cookiePathFor(userId) {
 
 async function runWithDriver(userId, run) {
   const cookiesPath = await cookiePathFor(userId)
-  const driver = new PlaywrightLinkedInSmart({ cookiesPath })
+  const driver = new PlaywrightLinkedInSmart({ cookiesPath, userId })
   try {
     return await run(driver)
   } finally {
