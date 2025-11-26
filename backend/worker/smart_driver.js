@@ -657,13 +657,35 @@ Message:
       const draftsWritten = Array.isArray(insertedDrafts) ? insertedDrafts.length : (insertedDrafts ? 1 : 0)
       const draftId = Array.isArray(insertedDrafts) ? insertedDrafts[0]?.id : insertedDrafts?.id
 
-      const { error: eApproval } = await supa.from('approvals').insert({
-        user_id: userId,
-        draft_id: draftId,
-        status: 'pending',
-        created_at: nowIso()
-      })
-      if (eApproval) throw eApproval
+      let approvalsResult
+      try {
+        approvalsResult = await supa.from('approvals').insert({
+          user_id: userId,
+          draft_id: draftId,
+          status: 'pending',
+          created_at: nowIso()
+        }).select()
+
+        console.log('SmartDriver[approvals_write_result]', {
+          status: approvalsResult?.status,
+          error: approvalsResult?.error
+        })
+
+        if (approvalsResult?.error) {
+          console.error('SmartDriver[approvals_write_error]', {
+            message: approvalsResult?.error?.message,
+            code: approvalsResult?.error?.code,
+            detail: approvalsResult?.error
+          })
+        }
+      } catch (err) {
+        console.error('SmartDriver[approvals_write_error]', {
+          message: err?.message,
+          code: err?.code,
+          detail: err
+        })
+        // Do NOT throw here. Approvals failure should not crash the SmartDriver loop.
+      }
 
       // If within work window, also enqueue for sending (status=scheduled) so it appears in Queue tab
       if (withinWorkWindow()) {
