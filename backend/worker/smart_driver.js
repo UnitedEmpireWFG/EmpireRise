@@ -6,7 +6,7 @@ import { fetchViaDriver, normalizeItem } from '../routes/import_linkedin.js'
 import { fetchProfileLocation } from '../drivers/driver_linkedin_smart.js'
 
 const BATCH = Number(process.env.SMART_BATCH || 25)         // how many prospects per tick
-const LOOP_MS = Number(process.env.SMART_LOOP_MS || 60_000) // 60s default
+const LOOP_MS = Number(process.env.SMART_LOOP_MS || 300_000) // Temporarily slower (5m) while debugging memory
 const LOCATION_ALLOWLIST = String(process.env.SMART_LOCATION_ALLOWLIST || process.env.LOCATION_ALLOWLIST || '')
   .split(',')
   .map(s => s.trim().toLowerCase())
@@ -724,16 +724,31 @@ Message:
   }
 }
 
+let isLoopRunning = false
+
 async function oneLoopRun(tag = 'manual') {
-  const users = await getActiveUsers()
-  let totals = { users: users.length, pulled: 0, scored: 0, drafted: 0 }
-  for (const userId of users) {
-    const a = await pullProspects({ userId }); totals.pulled += a.pulled
-    const b = await scoreLeads({ userId });    totals.scored += b.scored
-    const c = await generateDrafts({ userId }); totals.drafted += c.drafted
+  if (isLoopRunning) {
+    console.log('SmartDriver[loop_skip]', { reason: 'already_running' })
+    return
   }
-  console.log(`SmartDriver[${tag}]`, totals)
-  return totals
+
+  let totals = null
+  isLoopRunning = true
+  console.log('SmartDriver[loop_start]', { tag })
+  try {
+    const users = await getActiveUsers()
+    totals = { users: users.length, pulled: 0, scored: 0, drafted: 0 }
+    for (const userId of users) {
+      const a = await pullProspects({ userId }); totals.pulled += a.pulled
+      const b = await scoreLeads({ userId });    totals.scored += b.scored
+      const c = await generateDrafts({ userId }); totals.drafted += c.drafted
+    }
+    console.log(`SmartDriver[${tag}]`, totals)
+    return totals
+  } finally {
+    isLoopRunning = false
+    console.log('SmartDriver[loop_end]', { tag, totals })
+  }
 }
 
 let _timer = null
