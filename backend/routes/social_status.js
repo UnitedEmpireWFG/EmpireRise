@@ -44,16 +44,32 @@ async function getAuthIdentities(userId) {
 
 // main
 router.get('/status', async (req, res) => {
+  // never cache this endpoint
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+  res.setHeader('Pragma', 'no-cache')
+  res.setHeader('Expires', '0')
+  res.setHeader('Surrogate-Control', 'no-store')
+
+  const userId = req.user?.id || req.user?.sub || null
+  if (!userId) return res.status(401).json({ ok:false, error:'unauthorized' })
+
+  const payload = {
+    ok: true,
+    linkedin_oauth: false,
+    linkedin_cookies: false,
+    facebook: false,
+    instagram: false,
+    dbg: {
+      user_id: userId,
+      updated_at: null,
+      from_settings: { linkedin: false, facebook: false, instagram: false },
+      from_connections: { li: false, fb: false, ig: false },
+      from_accounts: { li: false, fb: false, ig: false },
+      from_identities: { li: false }
+    }
+  }
+
   try {
-    // never cache this endpoint
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
-    res.setHeader('Pragma', 'no-cache')
-    res.setHeader('Expires', '0')
-    res.setHeader('Surrogate-Control', 'no-store')
-
-    const userId = req.user?.id || req.user?.sub || null
-    if (!userId) return res.status(401).json({ ok:false, error:'unauthorized' })
-
     // admin read guarantees we see the write immediately
     const s = await getAppSettingsAdmin(userId)
     const conns = await getConnections(userId)
@@ -81,34 +97,36 @@ router.get('/status', async (req, res) => {
     const igFromAccts = accts.some(x => String(x.provider).toLowerCase().includes('instagram'))
     const igConnected = igFromSettings || igFromConns || igFromAccts
 
-    const payload = {
-      ok: true,
-      linkedin_oauth: linkedInConnected,
-      linkedin_cookies: liCookies,
-      facebook: fbConnected,
-      instagram: igConnected,
-      dbg: {
-        user_id: userId,
-        updated_at: s?.updated_at || null,
-        from_settings: { linkedin: liFromSettings, facebook: fbFromSettings, instagram: igFromSettings },
-        from_connections: { li: liFromConns, fb: fbFromConns, ig: igFromConns },
-        from_accounts: { li: liFromAccts, fb: fbFromAccts, ig: igFromAccts },
-        from_identities: { li: liFromIds }
-      }
+    payload.linkedin_oauth = linkedInConnected
+    payload.linkedin_cookies = liCookies
+    payload.facebook = fbConnected
+    payload.instagram = igConnected
+    payload.dbg = {
+      user_id: userId,
+      updated_at: s?.updated_at || null,
+      from_settings: { linkedin: liFromSettings, facebook: fbFromSettings, instagram: igFromSettings },
+      from_connections: { li: liFromConns, fb: fbFromConns, ig: igFromConns },
+      from_accounts: { li: liFromAccts, fb: fbFromAccts, ig: igFromAccts },
+      from_identities: { li: liFromIds }
     }
-
-    console.log('social_status_payload', JSON.stringify({
-      uid: userId,
-      li: payload.linkedin_oauth,
-      fb: payload.facebook,
-      ig: payload.instagram,
-      dbg: payload.dbg
-    }))
-
-    return res.json(payload)
   } catch (e) {
-    return res.status(200).json({ ok:false, error:String(e?.message || e) })
+    console.error('social_status_error', {
+      userId,
+      message: e?.message,
+      code: e?.code,
+      stack: e?.stack
+    })
   }
+
+  console.log('social_status_payload', JSON.stringify({
+    uid: userId,
+    li: payload.linkedin_oauth,
+    fb: payload.facebook,
+    ig: payload.instagram,
+    dbg: payload.dbg
+  }))
+
+  return res.json(payload)
 })
 
 export default router

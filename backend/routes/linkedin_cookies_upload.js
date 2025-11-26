@@ -51,8 +51,12 @@ router.post('/', upload.single('file'), async (req, res) => {
 
     await fs.writeFile(outPath, JSON.stringify(normalized, null, 2), 'utf-8')
 
+    console.log('li_cookies_store_result', { userId, result: 'saved_to_disk', path: outPath })
+    console.log('li_cookies_stored', { userId, cookies_length: normalized?.length || 0 })
+
     return res.json({ ok: true, saved: outPath })
   } catch (e) {
+    console.error('li_cookies_store_error', { message: e?.message, stack: e?.stack })
     return res.status(500).json({ ok: false, error: String(e?.message || e) })
   }
 })

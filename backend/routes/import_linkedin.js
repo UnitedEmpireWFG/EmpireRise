@@ -23,27 +23,41 @@ export async function loadDriverModule() {
   }
 }
 
-async function hasCookies(userId) {
+async function loadCookiesMeta(userId) {
+  const cookiesPath = path.join(COOKIES_DIR, `${userId}.json`)
   try {
-    const p = path.join(COOKIES_DIR, `${userId}.json`)
-    await fs.access(p)
-    return true
-  } catch {
-    return false
+    const buf = await fs.readFile(cookiesPath, 'utf-8')
+    const parsed = JSON.parse(buf)
+    const cookiesLength = Array.isArray(parsed) ? parsed.length : 0
+    return { exists: true, cookiesLength, cookiesPath }
+  } catch (e) {
+    if (e?.code !== 'ENOENT') {
+      console.log('li_import_cookies_read_error', { userId, cookiesPath, message: e?.message })
+    }
+    return { exists: false, cookiesLength: 0, cookiesPath }
   }
 }
 
 export async function fetchViaDriver({ userId, limit, flavor }) {
   if (!userId) return []
-  if (!(await hasCookies(userId))) {
-    console.log('li_import_no_cookies', userId)
+  const cookiesMeta = await loadCookiesMeta(userId)
+  console.log('li_cookies_load_attempt', { userId, cookiesPath: cookiesMeta.cookiesPath })
+  console.log('li_cookies_load_result', { userId, cookies_length: cookiesMeta.cookiesLength, exists: cookiesMeta.exists })
+
+  if (!cookiesMeta.exists || cookiesMeta.cookiesLength === 0) {
+    if (cookiesMeta.exists && cookiesMeta.cookiesLength === 0) {
+      console.log('li_import_empty_cookies', { userId, cookiesPath: cookiesMeta.cookiesPath })
+    }
+    if (!cookiesMeta.exists) {
+      console.log('li_import_no_cookies', userId)
+    }
     return []
   }
 
   const mod = await loadDriverModule()
   if (!mod) return []
 
-  process.env.LI_COOKIES_PATH = path.join(COOKIES_DIR, `${userId}.json`)
+  process.env.LI_COOKIES_PATH = cookiesMeta.cookiesPath
 
   const preferProspects = flavor === 'prospects'
   const fetchFn = preferProspects && typeof mod.fetchProspects === 'function'
