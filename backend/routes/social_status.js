@@ -1,11 +1,23 @@
 import express from 'express'
-import fs from 'node:fs/promises'
-import path from 'node:path'
+import fs from 'fs'
+import path from 'path'
 import { supa, supaAdmin } from '../db.js'
 
 const router = express.Router()
-const COOKIES_DIR = process.env.LI_COOKIES_DIR || '/opt/render/project/.data/li_cookies'
-async function exists(p) { try { await fs.access(p); return true } catch { return false } }
+const LI_COOKIES_BASE_DIR = '/opt/render/project/.data/li_cookies'
+
+function hasLinkedInCookies(userId) {
+  try {
+    const cookiesPath = path.join(LI_COOKIES_BASE_DIR, `${userId}.json`)
+    return fs.existsSync(cookiesPath)
+  } catch (err) {
+    console.error('social_status_li_cookies_check_error', {
+      userId,
+      message: err?.message
+    })
+    return false
+  }
+}
 
 // helpers
 async function getAppSettingsAdmin(userId) {
@@ -76,15 +88,14 @@ router.get('/status', async (req, res) => {
     const accts = await getAccounts(userId)
     const ids = await getAuthIdentities(userId)
 
-    const liCookiesPath = path.join(COOKIES_DIR, `${userId}.json`)
-    const liCookies = await exists(liCookiesPath)
+    const liCookiesPresent = hasLinkedInCookies(userId)
 
     // detect LinkedIn connection from any source
     const liFromSettings = Boolean(s?.linkedin_access_token)
     const liFromConns = conns.some(x => String(x.provider).toLowerCase().includes('linkedin'))
     const liFromAccts = accts.some(x => String(x.provider).toLowerCase().includes('linkedin'))
     const liFromIds = ids.some(x => String(x.provider).toLowerCase().includes('linkedin'))
-    const linkedInConnected = liFromSettings || liFromConns || liFromAccts || liFromIds
+    const linkedInConnected = (liFromSettings && liCookiesPresent) || liFromSettings || liFromConns || liFromAccts || liFromIds
 
     // detect Facebook and Instagram
     const fbFromSettings = Boolean(s?.meta_access_token)
@@ -98,10 +109,10 @@ router.get('/status', async (req, res) => {
     const igConnected = igFromSettings || igFromConns || igFromAccts
 
     payload.linkedin_oauth = linkedInConnected
-    payload.linkedin_cookies = liCookies
+    payload.linkedin_cookies = liCookiesPresent
     payload.facebook = fbConnected
     payload.instagram = igConnected
-    payload.dbg = {
+    const dbg = {
       user_id: userId,
       updated_at: s?.updated_at || null,
       from_settings: { linkedin: liFromSettings, facebook: fbFromSettings, instagram: igFromSettings },
@@ -109,6 +120,17 @@ router.get('/status', async (req, res) => {
       from_accounts: { li: liFromAccts, fb: fbFromAccts, ig: igFromAccts },
       from_identities: { li: liFromIds }
     }
+
+    dbg.from_connections = {
+      ...dbg.from_connections,
+      li: liCookiesPresent,
+      fb: dbg.from_connections?.fb ?? false,
+      ig: dbg.from_connections?.ig ?? false
+    }
+
+    dbg.from_cookies = { li: liCookiesPresent }
+
+    payload.dbg = dbg
   } catch (e) {
     console.error('social_status_error', {
       userId,
