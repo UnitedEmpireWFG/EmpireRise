@@ -6,6 +6,33 @@ import { normalize, looksCanadian, notInExcluded } from '../services/filters/sma
 const wait = (ms) => new Promise(r => setTimeout(r, ms))
 const bool = (v, d=false) => String(v ?? d).toLowerCase() === 'true'
 const num  = (v, d=0) => (Number(v) || d)
+function normalizePlaywrightCookies(rawCookies = []) {
+  return rawCookies.map((c) => {
+    const cookie = { ...c }
+
+    if (cookie.sameSite) {
+      const v = String(cookie.sameSite).toLowerCase()
+      if (v === 'strict') {
+        cookie.sameSite = 'Strict'
+      } else if (v === 'lax') {
+        cookie.sameSite = 'Lax'
+      } else if (v === 'none') {
+        cookie.sameSite = 'None'
+      } else {
+        delete cookie.sameSite
+      }
+    }
+
+    if (cookie.secure != null) {
+      cookie.secure = Boolean(cookie.secure)
+    }
+    if (cookie.httpOnly != null) {
+      cookie.httpOnly = Boolean(cookie.httpOnly)
+    }
+
+    return cookie
+  })
+}
 const CARD_SELECTORS = [
   '[data-test-reusable-connection-suggestion-card]',
   'li.discover-person-card',
@@ -61,10 +88,17 @@ export class LinkedInDriver {
     // Try per-user cookies first
     const perUserCookies = await this._cookiesFromPath(this.opts.cookiesPath)
     if (perUserCookies) {
-      await this.context.addCookies(perUserCookies.map(c => ({
+      const normalizedCookies = normalizePlaywrightCookies(perUserCookies).map(c => ({
         ...c,
         domain: c.domain?.startsWith('.') ? c.domain : (c.domain || '.linkedin.com')
-      })))
+      }))
+      console.log('li_import_driver_cookies_normalized_sample', normalizedCookies[0])
+      try {
+        await this.context.addCookies(normalizedCookies)
+      } catch (err) {
+        console.error('li_import_driver_run_error', err)
+        throw err
+      }
       await this.page.goto('https://www.linkedin.com/mynetwork/', { waitUntil: 'domcontentloaded' })
       if (await this._isLoggedIn()) { this.ready = true; return }
     }
@@ -72,10 +106,17 @@ export class LinkedInDriver {
     // Fallback to global cookies
     const cookies = await this._cookiesFromPath()
     if (cookies) {
-      await this.context.addCookies(cookies.map(c => ({
+      const normalizedCookies = normalizePlaywrightCookies(cookies).map(c => ({
         ...c,
         domain: c.domain?.startsWith('.') ? c.domain : (c.domain || '.linkedin.com')
-      })))
+      }))
+      console.log('li_import_driver_cookies_normalized_sample', normalizedCookies[0])
+      try {
+        await this.context.addCookies(normalizedCookies)
+      } catch (err) {
+        console.error('li_import_driver_run_error', err)
+        throw err
+      }
       await this.page.goto('https://www.linkedin.com/mynetwork/', { waitUntil: 'domcontentloaded' })
       if (await this._isLoggedIn()) { this.ready = true; return }
     }
