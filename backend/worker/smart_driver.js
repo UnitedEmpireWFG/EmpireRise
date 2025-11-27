@@ -2,12 +2,13 @@
 import { supa, supaAdmin } from '../db.js'
 import { aiComplete } from '../lib/ai.js'
 import { timePolicy } from '../services/time_windows.js'
-import { fetchViaDriver, normalizeItem } from '../routes/import_linkedin.js'
+import { fetchViaDriver, loadCookiesMeta, normalizeItem } from '../routes/import_linkedin.js'
 import { fetchProfileLocation } from '../drivers/driver_linkedin_smart.js'
 
 const BATCH = Number(process.env.SMART_BATCH || 25)         // how many prospects per tick
 const LOOP_MS = Number(process.env.SMART_LOOP_MS || 300_000) // Temporarily slower (5m) while debugging memory
 const LINKEDIN_AUTH_BACKOFF_MS = 60 * 60 * 1000
+const LINKEDIN_FAILURE_COOLDOWN_MS = 60 * 1000
 const MIN_LOOP_BACKOFF_MS = 60 * 1000
 const LOCATION_ALLOWLIST = String(process.env.SMART_LOCATION_ALLOWLIST || process.env.LOCATION_ALLOWLIST || '')
   .split(',')
@@ -16,6 +17,7 @@ const LOCATION_ALLOWLIST = String(process.env.SMART_LOCATION_ALLOWLIST || proces
 
 const columnCache = new Map()
 const linkedinBackoff = new Map()
+const linkedinCookiesCache = new Map()
 let nextAllowedRunAt = 0
 
 async function tableHasColumn(table, column) {
@@ -47,7 +49,13 @@ function nowIso() { return new Date().toISOString() }
 function isLinkedInAuthMissing(err) {
   const code = err?.code || err?.data?.code || ''
   const message = err?.message || ''
-  return code === 'linkedin_auth_missing' || message.includes('linkedin_auth_missing') || message.includes('missing_cookies')
+  return code === 'linkedin_auth_missing' || message.includes('linkedin_auth_missing')
+}
+
+function isMissingCookies(err) {
+  const code = err?.code || err?.data?.code || ''
+  const message = err?.message || ''
+  return code === 'missing_cookies' || message.includes('missing_cookies')
 }
 
 function getRetryAt(userId) {
@@ -59,11 +67,45 @@ function shouldSkipLinkedIn(userId) {
   return retryAt && Date.now() < retryAt
 }
 
-function setLinkedInBackoff(userId, reason = 'linkedin_auth_missing') {
-  const retryAt = Date.now() + LINKEDIN_AUTH_BACKOFF_MS
-  linkedinBackoff.set(userId, retryAt)
-  console.log('li_auth_backoff', { userId, reason, retry_at: new Date(retryAt).toISOString() })
-  return retryAt
+function setLinkedInBackoff(userId, reason = 'linkedin_auth_missing', delayMs = LINKEDIN_AUTH_BACKOFF_MS) {
+  const retryAt = Date.now() + Math.max(delayMs, LINKEDIN_AUTH_BACKOFF_MS)
+  const existing = linkedinBackoff.get(userId) || 0
+  const effective = existing > retryAt ? existing : retryAt
+  linkedinBackoff.set(userId, effective)
+  console.log('li_auth_backoff', { userId, reason, retry_at: new Date(effective).toISOString() })
+  return effective
+}
+
+function setLinkedInCooldown(userId, reason = 'linkedin_failure', delayMs = LINKEDIN_FAILURE_COOLDOWN_MS) {
+  const retryAt = Date.now() + Math.max(delayMs, LINKEDIN_FAILURE_COOLDOWN_MS)
+  const existing = linkedinBackoff.get(userId) || 0
+  const effective = existing > retryAt ? existing : retryAt
+  linkedinBackoff.set(userId, effective)
+  console.log('li_linkedin_cooldown', { userId, reason, retry_at: new Date(effective).toISOString() })
+  return effective
+}
+
+async function hasUsableLinkedInCookies(userId) {
+  if (!userId) return false
+
+  const cached = linkedinCookiesCache.get(userId)
+  if (cached && Date.now() - cached.checkedAt < LINKEDIN_FAILURE_COOLDOWN_MS) {
+    return cached.hasCookies
+  }
+
+  try {
+    const meta = await loadCookiesMeta(userId)
+    const hasCookies = Boolean(meta?.exists && meta.cookiesLength > 0)
+    linkedinCookiesCache.set(userId, { hasCookies, checkedAt: Date.now() })
+    if (!hasCookies) {
+      console.log('li_no_cookies', { userId })
+    }
+    return hasCookies
+  } catch (err) {
+    console.warn('li_cookies_check_error', { userId, message: err?.message || String(err) })
+    linkedinCookiesCache.set(userId, { hasCookies: false, checkedAt: Date.now() })
+    return false
+  }
 }
 
 function normalizeRegion(value) {
@@ -94,6 +136,11 @@ async function enrichRegion({ userId, stageId, prospectId, publicId, profileUrl 
 
   if (shouldSkipLinkedIn(userId)) return null
 
+  if (!await hasUsableLinkedInCookies(userId)) {
+    setLinkedInCooldown(userId, 'no_cookies')
+    return null
+  }
+
   let enriched = null
   try {
     enriched = await fetchProfileLocation({
@@ -102,7 +149,13 @@ async function enrichRegion({ userId, stageId, prospectId, publicId, profileUrl 
       profileUrl
     })
   } catch (err) {
-    if (isLinkedInAuthMissing(err)) setLinkedInBackoff(userId)
+    if (isLinkedInAuthMissing(err)) {
+      setLinkedInBackoff(userId, 'linkedin_auth_missing')
+    } else if (isMissingCookies(err)) {
+      setLinkedInCooldown(userId, 'no_cookies')
+    } else {
+      setLinkedInCooldown(userId, 'enrich_error')
+    }
     return null
   }
 
@@ -265,6 +318,12 @@ async function stageFromDriver({ userId }) {
     return { staged: 0, fetched: 0, skipped: true, retry_at: retryAt ? new Date(retryAt).toISOString() : null }
   }
 
+  const hasCookies = await hasUsableLinkedInCookies(userId)
+  if (!hasCookies) {
+    setLinkedInCooldown(userId, 'no_cookies')
+    return { staged: 0, fetched: 0, skipped: true, reason: 'no_cookies' }
+  }
+
   try {
     const fetched = await fetchViaDriver({ userId, limit: BATCH, flavor: 'prospects' })
     const dedup = new Map()
@@ -321,7 +380,11 @@ async function stageFromDriver({ userId }) {
     return { staged: payload.length, fetched: fetched?.length || 0, duplicates: existingSet.size }
   } catch (err) {
     if (isLinkedInAuthMissing(err)) {
-      setLinkedInBackoff(userId)
+      setLinkedInBackoff(userId, 'linkedin_auth_missing')
+    } else if (isMissingCookies(err)) {
+      setLinkedInCooldown(userId, 'no_cookies')
+    } else {
+      setLinkedInCooldown(userId, 'stage_error')
     }
     console.warn('smart_driver:stageFromDriver_error', err?.message || err)
     return { staged: 0, fetched: 0, error: err?.message || String(err) }

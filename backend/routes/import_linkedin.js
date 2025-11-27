@@ -76,7 +76,7 @@ export async function fetchViaDriver({ userId, limit, flavor }) {
     return Array.isArray(list) ? list : []
   } catch (e) {
     console.log('li_import_driver_run_error', e?.message || e)
-    return []
+    throw e
   }
 }
 
