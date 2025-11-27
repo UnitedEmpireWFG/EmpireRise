@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { createHash } from 'node:crypto'
 import fs from 'fs'
 import { supa } from '../db.js'
-import { getLinkedInCookiePath } from '../utils/linkedin_cookies.js'
+import { getCookieFilePath } from '../lib/linkedinCookies.js'
 
 const router = Router()
 const TABLE = 'li_contacts_stage'
@@ -23,7 +23,7 @@ export async function loadDriverModule() {
 }
 
 export async function loadCookiesMeta(userId) {
-  const cookiesPath = getLinkedInCookiePath(userId)
+  const cookiesPath = getCookieFilePath(userId)
   console.log('li_cookies_load_attempt', { userId, cookiesPath })
   try {
     const buf = await fs.promises.readFile(cookiesPath, 'utf-8')

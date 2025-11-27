@@ -1,9 +1,8 @@
 // backend/worker/on_connect_seeder.js
 import { supa, supaAdmin } from '../db.js'
 import fs from 'node:fs/promises'
-import path from 'node:path'
+import { getCookieFilePath } from '../lib/linkedinCookies.js'
 
-const COOKIES_DIR = process.env.LI_COOKIES_DIR || '/opt/render/project/.data/li_cookies'
 const DISCOVERY_LIMIT = Number(process.env.LI_DISCOVERY_LIMIT_PER_RUN || 20)
 
 export function enqueueDiscovery(userId) {
@@ -14,7 +13,7 @@ export function enqueueDiscovery(userId) {
 
 async function hasCookies(userId) {
   try {
-    const p = path.join(COOKIES_DIR, `${userId}.json`)
+    const p = getCookieFilePath(userId)
     await fs.access(p)
     return true
   } catch { return false }
@@ -37,7 +36,7 @@ async function seedForUser(userId) {
   const LinkedInSmart = await loadDriver()
   if (!LinkedInSmart) { console.log('li_seed_skip_no_driver', userId); return }
 
-  const cookiesPath = path.join(COOKIES_DIR, `${userId}.json`)
+  const cookiesPath = getCookieFilePath(userId)
   process.env.LI_COOKIES_PATH = cookiesPath
 
   const driver = new LinkedInSmart()
