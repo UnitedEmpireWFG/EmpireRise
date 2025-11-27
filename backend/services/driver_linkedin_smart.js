@@ -136,28 +136,54 @@ export class LinkedInSmart {
     } catch { return null }
   }
 
-  async _isLoggedIn() {
+  async _sessionState() {
+    const state = {
+      url: '',
+      title: '',
+      navVisible: false,
+      avatarVisible: false,
+      feedControlVisible: false,
+      signedOutForm: false,
+      loginRedirect: false,
+      ok: false,
+      reason: 'login_check_failed'
+    }
+
+    try { state.url = this.page.url() || '' } catch {}
+    try { state.title = await this.page.title() } catch {}
+
     try {
-      await this.page.waitForURL(/linkedin\.com\/(feed|mynetwork)/, { timeout: 7000 })
-      return true
-    } catch { return false }
+      state.navVisible = await this.page.locator('nav.global-nav').first().isVisible({ timeout: 2000 })
+    } catch {}
+    try {
+      state.avatarVisible = await this.page.locator('img.global-nav__me-photo, button.global-nav__me').first().isVisible({ timeout: 2000 })
+    } catch {}
+    try {
+      state.feedControlVisible = await this.page.locator('a[href*="/messaging/"], a[href*="/mynetwork/"]').first().isVisible({ timeout: 2000 })
+    } catch {}
+    try {
+      state.signedOutForm = await this.page.locator('input[name="session_key"], form#app__container').first().isVisible({ timeout: 2000 })
+    } catch {}
+
+    state.loginRedirect = /authwall|login|checkpoint/i.test(state.url)
+    state.ok = !state.loginRedirect && !state.signedOutForm && (state.navVisible || state.avatarVisible || state.feedControlVisible)
+
+    if (state.loginRedirect) state.reason = 'redirected_to_login'
+    else if (state.signedOutForm) state.reason = 'signed_out_view'
+    else if (state.ok) state.reason = 'ok'
+    else state.reason = 'missing_logged_in_ui'
+
+    return state
   }
 
-  async _passesAuthCheck() {
+  async hasValidLinkedInSession() {
     try {
-      const nav = this.page.locator('nav.global-nav').first()
-      const navCount = await nav.count().catch(() => 0)
-      if (navCount > 0) return true
+      await this.page.goto('https://www.linkedin.com/feed/', { waitUntil: 'networkidle', timeout: 20_000 })
+    } catch (err) {
+      console.warn('li_feed_nav_error', { userId: this.userId, message: err?.message, url: this.page?.url?.() })
+    }
 
-      const signedOut = await this.page.locator('input[name="session_key"]').count().catch(() => 0)
-      if (signedOut > 0) return false
-
-      const url = this.page.url() || ''
-      if (/authwall|login/i.test(url)) return false
-
-      const feedControls = await this.page.locator('a[href*="/messaging/"]').first().count().catch(() => 0)
-      return feedControls > 0
-    } catch { return false }
+    return await this._sessionState()
   }
 
   _hasAuthCookie(cookies = []) {
@@ -177,6 +203,7 @@ export class LinkedInSmart {
     if (fallbackCookies) candidates.push(fallbackCookies)
 
     let sawAuthCookie = false
+    let lastSessionState = null
 
     for (const rawCookies of candidates) {
       const normalizedCookies = normalizePlaywrightCookies(rawCookies).map(c => ({
@@ -202,12 +229,15 @@ export class LinkedInSmart {
         console.error('li_import_driver_run_error', err)
         throw err
       }
-      await this.page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded' })
-      if (await this._isLoggedIn() && await this._passesAuthCheck()) {
+
+      const sessionState = await this.hasValidLinkedInSession()
+      if (sessionState?.ok) {
         this.ready = true
         authFailureLogged.delete(this.userId)
         return
       }
+
+      lastSessionState = sessionState
     }
 
     const authError = new Error("linkedin_auth_missing")
@@ -218,7 +248,14 @@ export class LinkedInSmart {
         userId: this.userId,
         cookieCount: this.cookies?.length || 0,
         cookieNames: (this.cookies || []).map(c => c.name).sort(),
-        reason: sawAuthCookie ? 'login_check_failed' : 'no_auth_cookie'
+        pageUrl: lastSessionState?.url || null,
+        pageTitle: lastSessionState?.title || null,
+        navVisible: lastSessionState?.navVisible || false,
+        avatarVisible: lastSessionState?.avatarVisible || false,
+        feedControlVisible: lastSessionState?.feedControlVisible || false,
+        loginRedirect: lastSessionState?.loginRedirect || false,
+        signedOutView: lastSessionState?.signedOutForm || false,
+        reason: sawAuthCookie ? (lastSessionState?.reason || 'login_check_failed') : 'no_auth_cookie'
       })
       authFailureLogged.add(this.userId)
     }
