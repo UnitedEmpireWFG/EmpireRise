@@ -7,12 +7,16 @@ import { fetchProfileLocation } from '../drivers/driver_linkedin_smart.js'
 
 const BATCH = Number(process.env.SMART_BATCH || 25)         // how many prospects per tick
 const LOOP_MS = Number(process.env.SMART_LOOP_MS || 300_000) // Temporarily slower (5m) while debugging memory
+const LINKEDIN_AUTH_BACKOFF_MS = 60 * 60 * 1000
+const MIN_LOOP_BACKOFF_MS = 60 * 1000
 const LOCATION_ALLOWLIST = String(process.env.SMART_LOCATION_ALLOWLIST || process.env.LOCATION_ALLOWLIST || '')
   .split(',')
   .map(s => s.trim().toLowerCase())
   .filter(Boolean)
 
 const columnCache = new Map()
+const linkedinBackoff = new Map()
+let nextAllowedRunAt = 0
 
 async function tableHasColumn(table, column) {
   // Skip schema checks for prospects.updated_at to avoid cached schema issues
@@ -40,6 +44,28 @@ async function tableHasColumn(table, column) {
 
 function nowIso() { return new Date().toISOString() }
 
+function isLinkedInAuthMissing(err) {
+  const code = err?.code || err?.data?.code || ''
+  const message = err?.message || ''
+  return code === 'linkedin_auth_missing' || message.includes('linkedin_auth_missing') || message.includes('missing_cookies')
+}
+
+function getRetryAt(userId) {
+  return linkedinBackoff.get(userId) || 0
+}
+
+function shouldSkipLinkedIn(userId) {
+  const retryAt = getRetryAt(userId)
+  return retryAt && Date.now() < retryAt
+}
+
+function setLinkedInBackoff(userId, reason = 'linkedin_auth_missing') {
+  const retryAt = Date.now() + LINKEDIN_AUTH_BACKOFF_MS
+  linkedinBackoff.set(userId, retryAt)
+  console.log('li_auth_backoff', { userId, reason, retry_at: new Date(retryAt).toISOString() })
+  return retryAt
+}
+
 function normalizeRegion(value) {
   const trimmed = String(value || '').trim()
   return trimmed.length ? trimmed : null
@@ -66,11 +92,19 @@ function regionMatchesAllowlist(region) {
 async function enrichRegion({ userId, stageId, prospectId, publicId, profileUrl }) {
   if (!userId || (!publicId && !profileUrl)) return null
 
-  const enriched = await fetchProfileLocation({
-    userId,
-    handle: publicId,
-    profileUrl
-  }).catch(() => null)
+  if (shouldSkipLinkedIn(userId)) return null
+
+  let enriched = null
+  try {
+    enriched = await fetchProfileLocation({
+      userId,
+      handle: publicId,
+      profileUrl
+    })
+  } catch (err) {
+    if (isLinkedInAuthMissing(err)) setLinkedInBackoff(userId)
+    return null
+  }
 
   const location = normalizeRegion(enriched?.location)
   if (!location) return null
@@ -226,6 +260,11 @@ async function popStagedRows(userId) {
 async function stageFromDriver({ userId }) {
   if (!userId) return { staged: 0, fetched: 0 }
 
+  if (shouldSkipLinkedIn(userId)) {
+    const retryAt = getRetryAt(userId)
+    return { staged: 0, fetched: 0, skipped: true, retry_at: retryAt ? new Date(retryAt).toISOString() : null }
+  }
+
   try {
     const fetched = await fetchViaDriver({ userId, limit: BATCH, flavor: 'prospects' })
     const dedup = new Map()
@@ -278,8 +317,12 @@ async function stageFromDriver({ userId }) {
       .upsert(payload, { onConflict: 'user_id,fingerprint' })
     if (upsertError) throw new Error('stageFromDriver.upsert_error ' + upsertError.message)
 
+    linkedinBackoff.delete(userId)
     return { staged: payload.length, fetched: fetched?.length || 0, duplicates: existingSet.size }
   } catch (err) {
+    if (isLinkedInAuthMissing(err)) {
+      setLinkedInBackoff(userId)
+    }
     console.warn('smart_driver:stageFromDriver_error', err?.message || err)
     return { staged: 0, fetched: 0, error: err?.message || String(err) }
   }
@@ -732,6 +775,11 @@ async function oneLoopRun(tag = 'manual') {
     return
   }
 
+  if (nextAllowedRunAt && Date.now() < nextAllowedRunAt) {
+    console.log('SmartDriver[loop_skip]', { reason: 'backoff', retry_at: new Date(nextAllowedRunAt).toISOString() })
+    return
+  }
+
   let totals = null
   isLoopRunning = true
   console.log('SmartDriver[loop_start]', { tag })
@@ -745,9 +793,13 @@ async function oneLoopRun(tag = 'manual') {
     }
     console.log(`SmartDriver[${tag}]`, totals)
     return totals
+  } catch (err) {
+    nextAllowedRunAt = Date.now() + MIN_LOOP_BACKOFF_MS
+    console.error('SmartDriver[loop_error]', { message: err?.message, code: err?.code, detail: err, retry_at: new Date(nextAllowedRunAt).toISOString() })
+    throw err
   } finally {
     isLoopRunning = false
-    console.log('SmartDriver[loop_end]', { tag, totals })
+    console.log('SmartDriver[loop_end]', { tag, totals, next_retry_at: nextAllowedRunAt ? new Date(nextAllowedRunAt).toISOString() : null })
   }
 }
 
