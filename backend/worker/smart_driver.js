@@ -46,6 +46,19 @@ async function tableHasColumn(table, column) {
 
 function nowIso() { return new Date().toISOString() }
 
+function logDbError({ table, operation, result, error, context }) {
+  const err = error || result?.error
+  console.error('SmartDriver[draft_db_error]', {
+    table,
+    operation,
+    status: result?.status,
+    statusText: result?.statusText,
+    message: err?.message || err?.details || err?.hint || String(err),
+    detail: err,
+    context
+  })
+}
+
 function isLinkedInAuthMissing(err) {
   const code = err?.code || err?.data?.code || ''
   const message = err?.message || ''
@@ -747,79 +760,105 @@ Message:
       let body = 'Hi — quick question: what’s the #1 money thing on your mind lately?'
       try { body = (await aiComplete(prompt)).trim() } catch (_) {}
 
-      const draftInsertResult = await supa.from('drafts').insert({
+      const draftPayload = {
         user_id: userId,
         prospect_id: p.id,
         platform: 'linkedin',
         body,
         status: 'pending',
         created_at: nowIso()
-      }).select('id')
-      console.log('SmartDriver[draft_write_result]', { result: draftInsertResult })
+      }
 
-      const { data: insertedDrafts, error: eD } = draftInsertResult
-      if (eD) throw eD
+      let draftInsertResult
+      try {
+        draftInsertResult = await supa.from('drafts').insert(draftPayload).select('id')
+      } catch (err) {
+        logDbError({ table: 'drafts', operation: 'insert', error: err, context: { payload_keys: Object.keys(draftPayload) } })
+        continue
+      }
+
+      const { data: insertedDrafts, error: eD } = draftInsertResult || {}
+      if (eD) {
+        logDbError({ table: 'drafts', operation: 'insert', result: draftInsertResult, context: { payload_keys: Object.keys(draftPayload) } })
+        continue
+      }
 
       const draftsWritten = Array.isArray(insertedDrafts) ? insertedDrafts.length : (insertedDrafts ? 1 : 0)
       const draftId = Array.isArray(insertedDrafts) ? insertedDrafts[0]?.id : insertedDrafts?.id
 
-      let approvalsResult
+      console.log('SmartDriver[draft_write_result]', {
+        table: 'drafts',
+        operation: 'insert',
+        status: draftInsertResult?.status,
+        inserted: draftsWritten
+      })
+
+      if (!draftId) {
+        logDbError({ table: 'drafts', operation: 'insert', result: draftInsertResult, context: { reason: 'missing_draft_id' } })
+        continue
+      }
+
       try {
-        approvalsResult = await supa.from('approvals').insert({
+        const approvalsResult = await supa.from('approvals').insert({
           user_id: userId,
           draft_id: draftId,
           status: 'pending',
           created_at: nowIso()
-        }).select()
+        }).select('id')
+
+        const approvalsWritten = Array.isArray(approvalsResult?.data)
+          ? approvalsResult.data.length
+          : approvalsResult?.data
+            ? 1
+            : 0
 
         console.log('SmartDriver[approvals_write_result]', {
+          table: 'approvals',
+          operation: 'insert',
           status: approvalsResult?.status,
-          error: approvalsResult?.error
+          inserted: approvalsWritten,
+          error: approvalsResult?.error || null
         })
 
         if (approvalsResult?.error) {
-          console.error('SmartDriver[approvals_write_error]', {
-            message: approvalsResult?.error?.message,
-            code: approvalsResult?.error?.code,
-            detail: approvalsResult?.error
-          })
+          logDbError({ table: 'approvals', operation: 'insert', result: approvalsResult, context: { draft_id: draftId } })
         }
       } catch (err) {
-        console.error('SmartDriver[approvals_write_error]', {
-          message: err?.message,
-          code: err?.code,
-          detail: err
-        })
+        logDbError({ table: 'approvals', operation: 'insert', error: err, context: { draft_id: draftId } })
         // Do NOT throw here. Approvals failure should not crash the SmartDriver loop.
       }
 
       // If within work window, also enqueue for sending (status=scheduled) so it appears in Queue tab
       if (withinWorkWindow()) {
-        const { error: eQueue } = await supa.from('queue').insert({
-          user_id: userId,
-          prospect_id: p.id,
-          platform: 'linkedin',
-          body,
-          status: 'scheduled',
-          scheduled_at: nowIso(),
-          created_at: nowIso(),
-          draft_id: draftId,
-          preview: body.slice(0, 120)
-        })
-        if (eQueue) throw eQueue
+        try {
+          const { error: eQueue, status, statusText } = await supa.from('queue').insert({
+            user_id: userId,
+            prospect_id: p.id,
+            platform: 'linkedin',
+            body,
+            status: 'scheduled',
+            scheduled_at: nowIso(),
+            created_at: nowIso(),
+            draft_id: draftId,
+            preview: body.slice(0, 120)
+          })
+          if (eQueue) {
+            logDbError({ table: 'queue', operation: 'insert', result: { status, statusText, error: eQueue }, context: { draft_id: draftId } })
+          }
+        } catch (err) {
+          logDbError({ table: 'queue', operation: 'insert', error: err, context: { draft_id: draftId } })
+        }
       }
 
       drafted += draftsWritten
     }
 
-    const drafted_count = finalists.length
-
     console.log('SmartDriver[draft_finalists]', {
-      drafted_count,
+      drafted_count: finalists.length,
       drafted_actual: drafted
     })
 
-    return { drafted: drafted_count }
+    return { drafted }
   } catch (err) {
     console.error('SmartDriver[draft_error]', {
       message: err?.message,
