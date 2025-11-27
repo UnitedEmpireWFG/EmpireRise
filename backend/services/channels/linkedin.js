@@ -1,8 +1,6 @@
-import path from 'node:path'
 import { jitterMs, typePause } from '../pacing.js'
 import { LinkedInDriver } from '../linkedin_driver.js'
-
-const COOKIES_DIR = process.env.LI_COOKIES_DIR || '/opt/render/project/.data/li_cookies'
+import { getCookieFilePath } from '../../lib/linkedinCookies.js'
 
 export async function sendLinkedInFromQueue({ queueRow, contact, text }) {
   if (!contact?.handle) throw new Error('missing_recipient_handle')
@@ -10,7 +8,7 @@ export async function sendLinkedInFromQueue({ queueRow, contact, text }) {
   await typePause(text)
   await new Promise(r => setTimeout(r, jitterMs(900, 0.6)))
 
-  const cookiesPath = path.join(COOKIES_DIR, `${queueRow.user_id}.json`)
+  const cookiesPath = getCookieFilePath(queueRow.user_id)
   const driver = new LinkedInDriver({ cookiesPath })
   try {
     await driver.init()

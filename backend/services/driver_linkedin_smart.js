@@ -5,6 +5,7 @@ import { normalize, looksCanadian, notInExcluded } from '../services/filters/sma
 
 const wait = (ms) => new Promise(r => setTimeout(r, ms))
 const bool = (v, d=false) => String(v ?? d).toLowerCase() === 'true'
+let sharedBrowserPromise = null
 function normalizePlaywrightCookies(rawCookies = []) {
   return rawCookies.map((c) => {
     const cookie = { ...c }
@@ -44,6 +45,22 @@ const SUGGESTED_URLS = [
   'https://www.linkedin.com/mynetwork/'
 ]
 
+async function getSharedBrowser() {
+  if (!sharedBrowserPromise) {
+    sharedBrowserPromise = chromium.launch({ headless: true })
+      .then(browser => {
+        console.log('li_driver_browser_launch', { pid: process.pid })
+        browser.on('disconnected', () => { sharedBrowserPromise = null })
+        return browser
+      })
+      .catch(err => {
+        sharedBrowserPromise = null
+        throw err
+      })
+  }
+  return sharedBrowserPromise
+}
+
 export class LinkedInSmart {
   constructor(opts = {}) {
     this.browser = null
@@ -56,8 +73,7 @@ export class LinkedInSmart {
 
   async ensureBrowser() {
     if (this.browser) return
-    console.log('li_driver_browser_launch', { pid: process.pid })
-    this.browser = await chromium.launch({ headless: true })
+    this.browser = await getSharedBrowser()
   }
 
   async _withSession(run) {
@@ -78,8 +94,12 @@ export class LinkedInSmart {
       this.ready = false
       this.context = prevContext
       this.page = prevPage
-      try { await context?.close() } catch {}
+      await this._closeContext(context)
     }
+  }
+
+  async _closeContext(context) {
+    try { await context?.close() } catch {}
   }
 
   async _cookiesFromPath(overridePath) {
@@ -353,17 +373,25 @@ export class LinkedInSmart {
   }
 
   async close() {
-    await this.shutdown()
+    await this.shutdown({ shutdownBrowser: false })
   }
 
-  async shutdown() {
-    try { await this.context?.close() } catch {}
-    try { await this.browser?.close() } catch {}
-    if (this.browser) console.log('li_driver_browser_closed')
-    this.browser = null
+  async shutdown({ shutdownBrowser = true } = {}) {
+    await this._closeContext(this.context)
     this.context = null
     this.page = null
     this.ready = false
+
+    if (shutdownBrowser && this.browser) {
+      const browser = this.browser
+      this.browser = null
+      try { await browser.close() } catch {}
+      if (sharedBrowserPromise) {
+        const shared = await sharedBrowserPromise.catch(() => null)
+        if (shared === browser) sharedBrowserPromise = null
+      }
+      console.log('li_driver_browser_closed')
+    }
   }
 }
 

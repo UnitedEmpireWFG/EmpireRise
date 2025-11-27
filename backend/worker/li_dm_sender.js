@@ -1,10 +1,9 @@
 import { supa } from '../db.js'
 import { LinkedInDriver } from '../services/linkedin_driver.js'
 import { timePolicy } from '../services/time_windows.js'
-import path from 'node:path'
 import { isSeriousLinkedInError, notifyOps } from '../utils/ops_alerts.js'
+import { getCookieFilePath } from '../lib/linkedinCookies.js'
 
-const COOKIES_DIR = process.env.LI_COOKIES_DIR || '/opt/render/project/.data/li_cookies'
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
 async function fetchNextBatch(limit = 15) {
@@ -39,7 +38,7 @@ export async function tickLinkedInSender() {
     console.log(`[li_dm_sender] processing ${Object.keys(byUser).length} user(s)`)
 
     for (const [userId, items] of Object.entries(byUser)) {
-      const cookiesPath = path.join(COOKIES_DIR, `${userId}.json`)
+      const cookiesPath = getCookieFilePath(userId)
       const driver = new LinkedInDriver({ cookiesPath })
       let sent = 0
       let failed = 0

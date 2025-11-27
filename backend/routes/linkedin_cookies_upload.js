@@ -2,16 +2,14 @@
 import express from 'express'
 import multer from 'multer'
 import fs from 'fs'
-import path from 'path'
-import { getLinkedInCookiePath } from '../utils/linkedin_cookies.js'
+import { ensureCookieDirExists, getCookieFilePath } from '../lib/linkedinCookies.js'
 
 const router = express.Router()
 
 async function saveLinkedInCookiesToDisk(userId, cookies) {
-  const filePath = getLinkedInCookiePath(userId)
-  const dir = path.dirname(filePath)
+  const filePath = getCookieFilePath(userId)
 
-  await fs.promises.mkdir(dir, { recursive: true })
+  await ensureCookieDirExists()
 
   const tmpPath = `${filePath}.tmp`
   await fs.promises.writeFile(
@@ -83,7 +81,7 @@ router.post('/', upload.single('file'), async (req, res) => {
       return res.status(500).json({ ok: false, error: 'failed_to_save_cookies' })
     }
 
-    const savedPath = getLinkedInCookiePath(userId)
+    const savedPath = getCookieFilePath(userId)
 
     console.log('li_cookies_store_result', { userId, result: 'saved_to_disk', path: savedPath })
 

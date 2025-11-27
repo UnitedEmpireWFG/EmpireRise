@@ -1,13 +1,13 @@
 import fs from 'node:fs/promises'
 
 import { LinkedInSmart as PlaywrightLinkedInSmart } from '../services/driver_linkedin_smart.js'
-import { getLinkedInCookiePath } from '../utils/linkedin_cookies.js'
+import { getCookieFilePath } from '../lib/linkedinCookies.js'
 
 const NOTE_MAX_LENGTH = 280
 
 async function cookiePathFor(userId) {
   if (!userId) throw new Error('missing_user')
-  const perUserPath = getLinkedInCookiePath(userId)
+  const perUserPath = getCookieFilePath(userId)
   try {
     await fs.access(perUserPath)
     return perUserPath

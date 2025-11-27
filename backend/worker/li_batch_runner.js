@@ -1,11 +1,10 @@
-import path from 'node:path'
 import fs from 'node:fs/promises'
 
 import { supaAdmin } from '../db.js'
 import { LinkedInDriver } from '../services/linkedin_driver.js'
 import { looksCanadian, notInExcluded, normalize } from '../services/filters/smart_canada.js'
+import { getCookieFilePath } from '../lib/linkedinCookies.js'
 
-const COOKIES_DIR = process.env.LI_COOKIES_DIR || '/opt/render/project/.data/li_cookies'
 const DEFAULT_CONNECT_QUOTA = Number(process.env.LI_BATCH_DEFAULT_QUOTA || 20)
 const DM_RATIO = Math.max(0, Math.min(1, Number(process.env.LI_BATCH_DM_RATIO ?? 0.6))) || 0.6
 const EXCLUDE_TERMS = (process.env.LI_BATCH_EXCLUDE_TERMS || 'student,intern,seeking,looking for work')
@@ -22,7 +21,7 @@ const nap = (ms) => new Promise(r => setTimeout(r, ms))
 async function hasCookies(userId) {
   if (!userId) return false
   try {
-    const cookiesPath = path.join(COOKIES_DIR, `${userId}.json`)
+    const cookiesPath = getCookieFilePath(userId)
     await fs.access(cookiesPath)
     return true
   } catch {
