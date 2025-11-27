@@ -2,6 +2,18 @@
 import { useEffect, useMemo, useState } from "react"
 import { apiFetch } from "../lib/apiFetch"
 
+function formatStageLabel(stage) {
+  if (!stage) return "-"
+  const norm = String(stage || "").trim().toLowerCase()
+  if (!norm) return "-"
+  if (norm === "dnc") return "Do Not Contact"
+  return norm
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ")
+}
+
 function Row({ p, selected, onToggle, onDnc, onConvert, onSave, onConnect }) {
   const [edit, setEdit] = useState(false)
   const [note, setNote] = useState(p.note || "")
@@ -14,7 +26,7 @@ function Row({ p, selected, onToggle, onDnc, onConvert, onSave, onConnect }) {
       <td>{p.name || "-"}</td>
       <td>{p.platform || "-"}</td>
       <td>{p.handle || "-"}</td>
-      <td>{p.status || "-"}</td>
+      <td>{formatStageLabel(p.stage || p.status)}</td>
       <td>{p.dnc ? "DNC" : ""}</td>
       <td>
         {(p.profile_urls && typeof p.profile_urls === "object")
@@ -50,6 +62,10 @@ export default function Prospects() {
   const [err, setErr] = useState("")
   const [viewDnc, setViewDnc] = useState(false)
 
+  const [summary, setSummary] = useState(null)
+  const [summaryErr, setSummaryErr] = useState("")
+  const [summaryLoading, setSummaryLoading] = useState(false)
+
   const [name, setName] = useState("")
   const [handle, setHandle] = useState("")
   const [platform, setPlatform] = useState("linkedin")
@@ -57,7 +73,25 @@ export default function Prospects() {
 
   const [selected, setSelected] = useState({})
 
+  const loadSummary = () => {
+    setSummaryLoading(true)
+    apiFetch("/api/prospects/stats")
+      .then(resp => {
+        if (resp?.ok === false) throw new Error(resp.error || "stats_failed")
+        setSummary(resp)
+        setSummaryErr("")
+      })
+      .catch(e => {
+        setSummary(null)
+        setSummaryErr(e?.message || "stats_failed")
+      })
+      .finally(() => {
+        setSummaryLoading(false)
+      })
+  }
+
   const load = () => {
+    loadSummary()
     const url = viewDnc ? "/api/prospects/list/dnc" : "/api/prospects"
     apiFetch(url)
       .then(data => {
@@ -194,6 +228,59 @@ export default function Prospects() {
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
+      <div className="card" style={{ padding: 16, display: "grid", gap: 12 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 0.5, opacity: 0.7 }}>Prospects Pulled</div>
+            <div style={{ fontSize: 28, fontWeight: 600 }}>{summary?.total ?? 0}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 0.5, opacity: 0.7 }}>Active Outreach</div>
+            <div style={{ fontSize: 24, fontWeight: 500 }}>{summary?.active ?? 0}</div>
+          </div>
+          <div>
+            <button className="btn" onClick={load} disabled={summaryLoading}>Refresh Pipeline</button>
+          </div>
+        </div>
+
+        {summaryErr && (
+          <div style={{ color: "salmon" }}>Could not load outreach pipeline. {summaryErr}</div>
+        )}
+
+        {summaryLoading ? (
+          <div style={{ fontSize: 14, opacity: 0.8 }}>Loading pipeline…</div>
+        ) : summary && summary.stages?.length > 0 ? (
+          <div style={{ display: "grid", gap: 8 }}>
+            {summary.stages.map(stage => (
+              <div key={stage.key} style={{ display: "grid", gap: 4 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                  <span style={{ fontWeight: 500 }}>{stage.label}</span>
+                  <span style={{ fontWeight: 500 }}>{stage.count}</span>
+                </div>
+                <div style={{ height: 6, borderRadius: 4, background: "rgba(255,255,255,0.12)", overflow: "hidden" }}>
+                  <div
+                    style={{
+                      width: `${Math.min(100, Math.max(0, stage.percent || 0))}%`,
+                      background: "linear-gradient(90deg, rgba(255,215,0,0.9), rgba(255,165,0,0.7))",
+                      height: "100%"
+                    }}
+                  />
+                </div>
+                {stage.statuses?.length > 1 && (
+                  <div style={{ fontSize: 12, opacity: 0.75, display: "flex", flexWrap: "wrap", gap: 12 }}>
+                    {stage.statuses.map(s => (
+                      <span key={s.key}>{s.label} · {s.count}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ fontSize: 14, opacity: 0.8 }}>No prospects have been pulled yet.</div>
+        )}
+      </div>
+
       <div className="card" style={{ padding: 12, display: "grid", gridTemplateColumns: "1fr 1fr 1fr 2fr auto", gap: 8, maxWidth: 920 }}>
         <input placeholder="Name" value={name} onChange={e => setName(e.target.value)} />
         <input placeholder="Handle" value={handle} onChange={e => setHandle(e.target.value)} />
@@ -226,7 +313,7 @@ export default function Prospects() {
               <th style={{ textAlign: "left" }}>Name</th>
               <th style={{ textAlign: "left" }}>Platform</th>
               <th style={{ textAlign: "left" }}>Handle</th>
-              <th style={{ textAlign: "left" }}>Status</th>
+              <th style={{ textAlign: "left" }}>Stage</th>
               <th style={{ textAlign: "left" }}>DNC</th>
               <th style={{ textAlign: "left" }}>Profiles</th>
               <th style={{ textAlign: "left" }}>Actions</th>
