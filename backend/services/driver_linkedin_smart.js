@@ -5,7 +5,9 @@ import { normalize, looksCanadian, notInExcluded } from '../services/filters/sma
 
 const wait = (ms) => new Promise(r => setTimeout(r, ms))
 const bool = (v, d=false) => String(v ?? d).toLowerCase() === 'true'
-let sharedBrowserPromise = null
+let sharedBrowser = null
+let sharedBrowserLaunching = null
+const authFailureLogged = new Set()
 function normalizePlaywrightCookies(rawCookies = []) {
   return rawCookies.map((c) => {
     const cookie = { ...c }
@@ -45,21 +47,38 @@ const SUGGESTED_URLS = [
   'https://www.linkedin.com/mynetwork/'
 ]
 
-async function getSharedBrowser() {
-  if (!sharedBrowserPromise) {
-    sharedBrowserPromise = chromium.launch({ headless: true })
-      .then(browser => {
-        console.log('li_driver_browser_launch', { pid: process.pid })
-        browser.on('disconnected', () => { sharedBrowserPromise = null })
-        return browser
-      })
-      .catch(err => {
-        sharedBrowserPromise = null
-        throw err
-      })
-  }
-  return sharedBrowserPromise
+async function getBrowser() {
+  if (sharedBrowser && sharedBrowser.isConnected()) return sharedBrowser
+  if (sharedBrowserLaunching) return sharedBrowserLaunching
+
+  sharedBrowserLaunching = chromium.launch({
+    headless: true,
+    args: [
+      '--disable-dev-shm-usage',
+      '--no-sandbox',
+      '--disable-gpu',
+      '--disable-setuid-sandbox',
+    ],
+  }).then(browser => {
+    sharedBrowser = browser
+    sharedBrowserLaunching = null
+    console.log('li_driver_browser_launch', { pid: process.pid })
+    browser.on('disconnected', () => { sharedBrowser = null })
+    return browser
+  }).catch(err => {
+    sharedBrowserLaunching = null
+    sharedBrowser = null
+    throw err
+  })
+
+  return sharedBrowserLaunching
 }
+
+process.once('exit', async () => {
+  if (sharedBrowser && sharedBrowser.isConnected()) {
+    try { await sharedBrowser.close() } catch {}
+  }
+})
 
 export class LinkedInSmart {
   constructor(opts = {}) {
@@ -73,7 +92,7 @@ export class LinkedInSmart {
 
   async ensureBrowser() {
     if (this.browser) return
-    this.browser = await getSharedBrowser()
+    this.browser = await getBrowser()
   }
 
   async _withSession(run) {
@@ -94,8 +113,13 @@ export class LinkedInSmart {
       this.ready = false
       this.context = prevContext
       this.page = prevPage
+      await this._closePage(page)
       await this._closeContext(context)
     }
+  }
+
+  async _closePage(page) {
+    try { await page?.close() } catch {}
   }
 
   async _closeContext(context) {
@@ -116,6 +140,23 @@ export class LinkedInSmart {
     try {
       await this.page.waitForURL(/linkedin\.com\/(feed|mynetwork)/, { timeout: 7000 })
       return true
+    } catch { return false }
+  }
+
+  async _passesAuthCheck() {
+    try {
+      const nav = this.page.locator('nav.global-nav').first()
+      const navCount = await nav.count().catch(() => 0)
+      if (navCount > 0) return true
+
+      const signedOut = await this.page.locator('input[name="session_key"]').count().catch(() => 0)
+      if (signedOut > 0) return false
+
+      const url = this.page.url() || ''
+      if (/authwall|login/i.test(url)) return false
+
+      const feedControls = await this.page.locator('a[href*="/messaging/"]').first().count().catch(() => 0)
+      return feedControls > 0
     } catch { return false }
   }
 
@@ -147,7 +188,6 @@ export class LinkedInSmart {
       console.log("li_auth_cookies_debug", {
         userId: this.userId,
         cookieCount: normalizedCookies?.length || 0,
-        cookieNames: (normalizedCookies || []).map(c => c.name).sort(),
         hasAuthCookie,
       })
 
@@ -162,23 +202,27 @@ export class LinkedInSmart {
         console.error('li_import_driver_run_error', err)
         throw err
       }
-      await this.page.goto('https://www.linkedin.com/mynetwork/', { waitUntil: 'domcontentloaded' })
-      if (await this._isLoggedIn()) { this.ready = true; return }
+      await this.page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded' })
+      if (await this._isLoggedIn() && await this._passesAuthCheck()) {
+        this.ready = true
+        authFailureLogged.delete(this.userId)
+        return
+      }
     }
 
     const authError = new Error("linkedin_auth_missing")
     authError.code = "linkedin_auth_missing"
 
-    if (!sawAuthCookie) {
+    if (!authFailureLogged.has(this.userId)) {
       console.error("li_auth_missing_detail", {
         userId: this.userId,
         cookieCount: this.cookies?.length || 0,
         cookieNames: (this.cookies || []).map(c => c.name).sort(),
+        reason: sawAuthCookie ? 'login_check_failed' : 'no_auth_cookie'
       })
-      throw authError
+      authFailureLogged.add(this.userId)
     }
 
-    // Auth cookies were present but we still appear logged out.
     throw authError
   }
 
@@ -376,7 +420,7 @@ export class LinkedInSmart {
     await this.shutdown({ shutdownBrowser: false })
   }
 
-  async shutdown({ shutdownBrowser = true } = {}) {
+  async shutdown({ shutdownBrowser = false } = {}) {
     await this._closeContext(this.context)
     this.context = null
     this.page = null
@@ -386,10 +430,6 @@ export class LinkedInSmart {
       const browser = this.browser
       this.browser = null
       try { await browser.close() } catch {}
-      if (sharedBrowserPromise) {
-        const shared = await sharedBrowserPromise.catch(() => null)
-        if (shared === browser) sharedBrowserPromise = null
-      }
       console.log('li_driver_browser_closed')
     }
   }
