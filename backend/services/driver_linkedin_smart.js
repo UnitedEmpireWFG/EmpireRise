@@ -233,12 +233,26 @@ export class LinkedInSmart {
       // Go directly to the login page
       await this.page.goto('https://www.linkedin.com/login', { waitUntil: 'networkidle', timeout: 30000 })
 
-      // Fill credentials
-      await this.page.fill('input[name="session_key"]', LI_USER)
-      await this.page.fill('input[name="session_password"]', LI_PASS)
+      // Select visible username field (ignore hidden inputs)
+      const userField = this.page
+        .locator('input[name="session_key"]:not([type="hidden"]), input#username')
+        .first()
+
+      await userField.waitFor({ state: 'visible', timeout: 30000 })
+      await userField.fill(LI_USER)
+
+      // Select visible password field
+      const passField = this.page
+        .locator('input[name="session_password"]:not([type="hidden"]), input#password')
+        .first()
+
+      await passField.waitFor({ state: 'visible', timeout: 30000 })
+      await passField.fill(LI_PASS)
 
       // Click the sign in button
-      const loginButton = this.page.locator('button[type="submit"], button[aria-label*="Sign in"]')
+      const loginButton = this.page.locator(
+        'button[type="submit"], button[aria-label*="Sign in"], button[data-litms-control-urn*="login-submit"]'
+      )
       await loginButton.first().click()
 
       // Wait for navigation. Prefer feed, but do not hard fail if not exact.
