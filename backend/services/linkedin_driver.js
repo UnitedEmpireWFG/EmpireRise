@@ -56,12 +56,36 @@ export class LinkedInDriver {
     this.opts = opts   // { cookiesPath?: string }
   }
 
+  _contextIsClosed() {
+    try {
+      if (!this.context) return true
+      if (!this.browser || !this.browser.isConnected()) return true
+      return false
+    } catch {
+      return true
+    }
+  }
+
   async launch() {
     console.log('Playwright launching with default Chromium')
     const browser = await chromium.launch({ headless: true })
     this.browser = browser
     this.context = await this.browser.newContext({ viewport: { width: 1420, height: 900 } })
     this.page = await this.context.newPage()
+  }
+
+  async ensureBrowser() {
+    if (this.browser && this.browser.isConnected && this.browser.isConnected()) {
+      return
+    }
+
+    if (this.browser && this.browser.close) {
+      try {
+        await this.browser.close()
+      } catch {}
+    }
+
+    await this.launch()
   }
 
   async _cookiesFromPath(overridePath) {
@@ -83,7 +107,7 @@ export class LinkedInDriver {
 
   async init() {
     if (this.ready) return
-    if (!this.browser) await this.launch()
+    await this.ensureBrowser()
 
     // Try per-user cookies first
     const perUserCookies = await this._cookiesFromPath(this.opts.cookiesPath)
@@ -93,11 +117,31 @@ export class LinkedInDriver {
         domain: c.domain?.startsWith('.') ? c.domain : (c.domain || '.linkedin.com')
       }))
       console.log('li_import_driver_cookies_normalized_sample', normalizedCookies[0])
-      try {
+      const applyCookies = async () => {
         await this.context.addCookies(normalizedCookies)
+      }
+
+      try {
+        if (this._contextIsClosed()) {
+          await this.ensureBrowser()
+        }
+        await applyCookies()
       } catch (err) {
-        console.error('li_import_driver_run_error', err)
-        throw err
+        const msg = String(err && err.message ? err.message : err)
+        const closedError = msg.includes('Target page, context or browser has been closed')
+
+        if (closedError) {
+          try {
+            await this.ensureBrowser()
+            await applyCookies()
+          } catch (retryErr) {
+            console.error('li_import_driver_run_error', retryErr)
+            throw retryErr
+          }
+        } else {
+          console.error('li_import_driver_run_error', err)
+          throw err
+        }
       }
       await this.page.goto('https://www.linkedin.com/mynetwork/', { waitUntil: 'domcontentloaded' })
       if (await this._isLoggedIn()) { this.ready = true; return }
@@ -111,11 +155,31 @@ export class LinkedInDriver {
         domain: c.domain?.startsWith('.') ? c.domain : (c.domain || '.linkedin.com')
       }))
       console.log('li_import_driver_cookies_normalized_sample', normalizedCookies[0])
-      try {
+      const applyCookies = async () => {
         await this.context.addCookies(normalizedCookies)
+      }
+
+      try {
+        if (this._contextIsClosed()) {
+          await this.ensureBrowser()
+        }
+        await applyCookies()
       } catch (err) {
-        console.error('li_import_driver_run_error', err)
-        throw err
+        const msg = String(err && err.message ? err.message : err)
+        const closedError = msg.includes('Target page, context or browser has been closed')
+
+        if (closedError) {
+          try {
+            await this.ensureBrowser()
+            await applyCookies()
+          } catch (retryErr) {
+            console.error('li_import_driver_run_error', retryErr)
+            throw retryErr
+          }
+        } else {
+          console.error('li_import_driver_run_error', err)
+          throw err
+        }
       }
       await this.page.goto('https://www.linkedin.com/mynetwork/', { waitUntil: 'domcontentloaded' })
       if (await this._isLoggedIn()) { this.ready = true; return }
