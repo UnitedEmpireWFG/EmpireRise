@@ -5,6 +5,50 @@ import { getCookieFilePath } from '../lib/linkedinCookies.js'
 
 const NOTE_MAX_LENGTH = 280
 
+// Per-user driver instance cache to prevent concurrent browser spawns
+const driverPool = new Map()
+const driverLocks = new Map()
+
+async function acquireDriverLock(userId) {
+  if (!userId) return null
+
+  // Wait for existing lock to release
+  while (driverLocks.get(userId)) {
+    await new Promise(r => setTimeout(r, 100))
+  }
+
+  driverLocks.set(userId, true)
+  return () => driverLocks.delete(userId)
+}
+
+function getPooledDriver(userId) {
+  if (!userId) return null
+  const cached = driverPool.get(userId)
+  if (!cached) return null
+
+  // Check if driver is still valid
+  if (cached.lastUsed && Date.now() - cached.lastUsed > 300000) {
+    // Stale driver (> 5 min old), remove it
+    driverPool.delete(userId)
+    return null
+  }
+
+  return cached.driver
+}
+
+function setPooledDriver(userId, driver) {
+  if (!userId || !driver) return
+  driverPool.set(userId, {
+    driver,
+    lastUsed: Date.now()
+  })
+}
+
+function removePooledDriver(userId) {
+  if (!userId) return
+  driverPool.delete(userId)
+}
+
 async function cookiePathFor(userId) {
   if (!userId) throw new Error('missing_user')
   const perUserPath = getCookieFilePath(userId)
@@ -29,12 +73,43 @@ async function cookiePathFor(userId) {
 }
 
 async function runWithDriver(userId, run) {
-  const cookiesPath = await cookiePathFor(userId)
-  const driver = new PlaywrightLinkedInSmart({ cookiesPath, userId })
+  const releaseLock = await acquireDriverLock(userId)
+
   try {
-    return await run(driver)
+    // Try to reuse pooled driver first
+    let driver = getPooledDriver(userId)
+    let shouldCloseDriver = false
+
+    if (!driver) {
+      // Create new driver
+      const cookiesPath = await cookiePathFor(userId)
+      driver = new PlaywrightLinkedInSmart({ cookiesPath, userId })
+      setPooledDriver(userId, driver)
+      console.log('li_driver_pool_create', { userId })
+    } else {
+      console.log('li_driver_pool_reuse', { userId })
+    }
+
+    try {
+      return await run(driver)
+    } catch (err) {
+      // On errors, remove from pool so next call gets fresh driver
+      const isAuthError = err?.code === 'linkedin_auth_missing' || err?.message?.includes('linkedin_auth_missing')
+      const isContextClosed = err?.message?.includes('Target page, context or browser has been closed')
+
+      if (isAuthError || isContextClosed) {
+        console.log('li_driver_pool_invalidate', { userId, reason: isAuthError ? 'auth_error' : 'context_closed' })
+        removePooledDriver(userId)
+        shouldCloseDriver = true
+      }
+      throw err
+    } finally {
+      if (shouldCloseDriver && driver) {
+        await driver.close().catch(() => {})
+      }
+    }
   } finally {
-    await driver.close().catch(() => {})
+    if (releaseLock) releaseLock()
   }
 }
 

@@ -11,6 +11,8 @@ const bool = (v, d=false) => String(v ?? d).toLowerCase() === 'true'
 let sharedBrowser = null
 let sharedBrowserLaunching = null
 const authFailureLogged = new Set()
+const initRetryCount = new Map()
+const MAX_INIT_RETRIES = 3
 function normalizePlaywrightCookies(rawCookies = []) {
   return rawCookies.map((c) => {
     const cookie = { ...c }
@@ -61,6 +63,29 @@ async function getBrowser() {
       '--no-sandbox',
       '--disable-gpu',
       '--disable-setuid-sandbox',
+      '--disable-blink-features=AutomationControlled',
+      '--disable-extensions',
+      '--disable-plugins',
+      '--disable-background-networking',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      '--disable-features=TranslateUI,BlinkGenPropertyTrees',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-hang-monitor',
+      '--disable-prompt-on-repost',
+      '--disable-sync',
+      '--metrics-recording-only',
+      '--mute-audio',
+      '--no-pings',
+      '--password-store=basic',
+      '--use-mock-keychain',
+      '--force-color-profile=srgb',
+      '--disable-accelerated-2d-canvas',
+      '--disable-webgl',
+      '--disable-webgl2',
+      '--window-size=1420,900'
     ],
   }).then(browser => {
     sharedBrowser = browser
@@ -91,6 +116,8 @@ export class LinkedInSmart {
     this.ready = false
     this.opts = opts   // { cookiesPath?: string, userId?: string }
     this.userId = opts.userId || null
+    this._initLock = null
+    this._contextRefCount = 0
   }
 
   async ensureBrowser() {
@@ -104,20 +131,47 @@ export class LinkedInSmart {
     let page = null
     const prevContext = this.context
     const prevPage = this.page
+    const prevReady = this.ready
     this.ready = false
+    this._contextRefCount++
+
     try {
-      context = await this.browser.newContext({ viewport: { width: 1420, height: 900 } })
+      context = await this.browser.newContext({
+        viewport: { width: 1420, height: 900 },
+        deviceScaleFactor: 1,
+        isMobile: false,
+        hasTouch: false,
+        javaScriptEnabled: true,
+        locale: 'en-US',
+        timezoneId: 'America/New_York'
+      })
       page = await context.newPage()
       this.context = context
       this.page = page
       await this.init()
       return await run()
     } finally {
-      this.ready = false
+      this._contextRefCount--
+      this.ready = prevReady
       this.context = prevContext
       this.page = prevPage
-      await this._closePage(page)
-      await this._closeContext(context)
+
+      // Close page and context in correct order
+      if (page) {
+        try {
+          await page.close({ runBeforeUnload: false })
+        } catch (err) {
+          console.warn('li_page_close_error', { userId: this.userId, error: err?.message })
+        }
+      }
+
+      if (context) {
+        try {
+          await context.close()
+        } catch (err) {
+          console.warn('li_context_close_error', { userId: this.userId, error: err?.message })
+        }
+      }
     }
   }
 
@@ -171,8 +225,8 @@ export class LinkedInSmart {
       navVisible: false,
       avatarVisible: false,
       feedControlVisible: false,
-      signedOutForm: false,
-      loginRedirect: false,
+      feedVisible: false,
+      loginFormInteractive: false,
       ok: false,
       reason: 'login_check_failed'
     }
@@ -180,24 +234,52 @@ export class LinkedInSmart {
     try { state.url = this.page.url() || '' } catch {}
     try { state.title = await this.page.title() } catch {}
 
+    // Wait up to 12 seconds with smart polling for logged-in UI elements
+    const LOGGED_IN_SELECTORS = [
+      'nav.global-nav',
+      'img.global-nav__me-photo',
+      'button.global-nav__me',
+      'a[href*="/messaging/"]',
+      'a[href*="/mynetwork/"]',
+      'div.scaffold-layout__main',
+      'main.scaffold-layout__main'
+    ]
+
     try {
-      state.navVisible = await this.page.locator('nav.global-nav').first().isVisible({ timeout: 2000 })
+      await this.page.locator(LOGGED_IN_SELECTORS.join(', ')).first().waitFor({
+        state: 'visible',
+        timeout: 12000
+      })
+    } catch {
+      // Continue to check individual elements
+    }
+
+    // Check each logged-in indicator with shorter timeout now
+    try {
+      state.navVisible = await this.page.locator('nav.global-nav').first().isVisible({ timeout: 1000 })
     } catch {}
     try {
-      state.avatarVisible = await this.page.locator('img.global-nav__me-photo, button.global-nav__me').first().isVisible({ timeout: 2000 })
+      state.avatarVisible = await this.page.locator('img.global-nav__me-photo, button.global-nav__me').first().isVisible({ timeout: 1000 })
     } catch {}
     try {
-      state.feedControlVisible = await this.page.locator('a[href*="/messaging/"], a[href*="/mynetwork/"]').first().isVisible({ timeout: 2000 })
+      state.feedControlVisible = await this.page.locator('a[href*="/messaging/"], a[href*="/mynetwork/"]').first().isVisible({ timeout: 1000 })
     } catch {}
     try {
-      state.signedOutForm = await this.page.locator('input[name="session_key"], form#app__container').first().isVisible({ timeout: 2000 })
+      state.feedVisible = await this.page.locator('div.scaffold-layout__main, main.scaffold-layout__main').first().isVisible({ timeout: 1000 })
     } catch {}
 
-    state.loginRedirect = /authwall|login|checkpoint/i.test(state.url)
-    state.ok = !state.loginRedirect && !state.signedOutForm && (state.navVisible || state.avatarVisible || state.feedControlVisible)
+    // Only consider login form visible if it's actually interactive (not hidden)
+    try {
+      const loginForm = this.page.locator('form.login__form, div.login__form, input#username').first()
+      const isVisible = await loginForm.isVisible({ timeout: 1000 })
+      const isEnabled = isVisible ? await loginForm.isEnabled({ timeout: 500 }).catch(() => false) : false
+      state.loginFormInteractive = isVisible && isEnabled
+    } catch {}
 
-    if (state.loginRedirect) state.reason = 'redirected_to_login'
-    else if (state.signedOutForm) state.reason = 'signed_out_view'
+    // Session is OK if ANY logged-in UI is visible AND login form is NOT interactive
+    state.ok = !state.loginFormInteractive && (state.navVisible || state.avatarVisible || state.feedControlVisible || state.feedVisible)
+
+    if (state.loginFormInteractive) state.reason = 'login_form_visible'
     else if (state.ok) state.reason = 'ok'
     else state.reason = 'missing_logged_in_ui'
 
@@ -206,10 +288,13 @@ export class LinkedInSmart {
 
   async hasValidLinkedInSession() {
     try {
-      await this.page.goto('https://www.linkedin.com/feed/', { waitUntil: 'networkidle', timeout: 20_000 })
+      await this.page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded', timeout: 20_000 })
     } catch (err) {
       console.warn('li_feed_nav_error', { userId: this.userId, message: err?.message, url: this.page?.url?.() })
     }
+
+    // Wait for redirects to stabilize (LinkedIn may temporarily redirect to /login then back)
+    await new Promise(r => setTimeout(r, 3000))
 
     return await this._sessionState()
   }
@@ -231,22 +316,26 @@ export class LinkedInSmart {
       }
 
       // Go directly to the login page
-      await this.page.goto('https://www.linkedin.com/login', { waitUntil: 'networkidle', timeout: 30000 })
+      await this.page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded', timeout: 30000 })
 
-      // Select visible username field (ignore hidden inputs)
-      const userField = this.page
-        .locator('input[name="session_key"]:not([type="hidden"]), input#username')
-        .first()
+      // Wait for login form container to be visible first
+      await this.page.locator('form.login__form, div.login__form, main').first().waitFor({
+        state: 'visible',
+        timeout: 15000
+      })
 
-      await userField.waitFor({ state: 'visible', timeout: 30000 })
+      // Wait a moment for form to fully render
+      await new Promise(r => setTimeout(r, 1500))
+
+      // Prefer input#username and input#password (visible fields)
+      const userField = this.page.locator('input#username, input[autocomplete="username"]').first()
+      await userField.waitFor({ state: 'visible', timeout: 15000 })
+      await userField.click()
       await userField.fill(LI_USER)
 
-      // Select visible password field
-      const passField = this.page
-        .locator('input[name="session_password"]:not([type="hidden"]), input#password')
-        .first()
-
-      await passField.waitFor({ state: 'visible', timeout: 30000 })
+      const passField = this.page.locator('input#password, input[type="password"][autocomplete="current-password"]').first()
+      await passField.waitFor({ state: 'visible', timeout: 15000 })
+      await passField.click()
       await passField.fill(LI_PASS)
 
       // Click the sign in button
@@ -293,9 +382,52 @@ export class LinkedInSmart {
   }
 
   async init() {
+    // Prevent concurrent init calls
+    if (this._initLock) {
+      await this._initLock
+      return
+    }
+
     if (this.ready) return
+
+    this._initLock = this._doInit()
+    try {
+      await this._initLock
+    } finally {
+      this._initLock = null
+    }
+  }
+
+  async _doInit() {
     if (!this.browser) await this.ensureBrowser()
 
+    const retryKey = this.userId || 'global'
+    const retries = initRetryCount.get(retryKey) || 0
+
+    // Exponential backoff: 2s, 4s, 8s
+    if (retries > 0) {
+      const backoffMs = Math.min(2000 * Math.pow(2, retries - 1), 8000)
+      console.log('li_init_backoff', { userId: this.userId, retries, backoffMs })
+      await wait(backoffMs)
+    }
+
+    try {
+      return await this._doInitAttempt()
+    } catch (err) {
+      const isAuthError = err?.code === 'linkedin_auth_missing' || err?.message?.includes('linkedin_auth_missing')
+
+      if (isAuthError && retries < MAX_INIT_RETRIES) {
+        initRetryCount.set(retryKey, retries + 1)
+      } else {
+        // Reset retry count on success or max retries
+        initRetryCount.delete(retryKey)
+      }
+
+      throw err
+    }
+  }
+
+  async _doInitAttempt() {
     // Try per-user cookies first
     const candidates = []
     const perUserCookies = await this._cookiesFromPath(this.opts.cookiesPath)
@@ -336,11 +468,14 @@ export class LinkedInSmart {
       if (sessionState?.ok) {
         this.ready = true
         authFailureLogged.delete(this.userId)
+        // Reset retry count on success
+        const retryKey = this.userId || 'global'
+        initRetryCount.delete(retryKey)
         return
       }
 
-      // If cookies lead to login or signed out views, try credential login once
-      if (sessionState && (sessionState.loginRedirect || sessionState.signedOutForm)) {
+      // If cookies lead to login form, try credential login once
+      if (sessionState && sessionState.loginFormInteractive) {
         console.log('li_auth_cookies_login_redirect', {
           userId: this.userId,
           reason: sessionState.reason,
@@ -357,6 +492,9 @@ export class LinkedInSmart {
         if (loginResult.ok) {
           this.ready = true
           authFailureLogged.delete(this.userId)
+          // Reset retry count on success
+          const retryKey = this.userId || 'global'
+          initRetryCount.delete(retryKey)
           return
         }
       }
@@ -377,8 +515,8 @@ export class LinkedInSmart {
         navVisible: lastSessionState?.navVisible || false,
         avatarVisible: lastSessionState?.avatarVisible || false,
         feedControlVisible: lastSessionState?.feedControlVisible || false,
-        loginRedirect: lastSessionState?.loginRedirect || false,
-        signedOutView: lastSessionState?.signedOutForm || false,
+        feedVisible: lastSessionState?.feedVisible || false,
+        loginFormInteractive: lastSessionState?.loginFormInteractive || false,
         reason: sawAuthCookie ? (lastSessionState?.reason || 'login_check_failed') : 'no_auth_cookie'
       })
       authFailureLogged.add(this.userId)
@@ -582,6 +720,20 @@ export class LinkedInSmart {
   }
 
   async shutdown({ shutdownBrowser = false } = {}) {
+    // Wait for any active contexts to finish
+    let waitCount = 0
+    while (this._contextRefCount > 0 && waitCount < 30) {
+      await new Promise(r => setTimeout(r, 100))
+      waitCount++
+    }
+
+    if (this._contextRefCount > 0) {
+      console.warn('li_driver_shutdown_with_active_contexts', {
+        userId: this.userId,
+        refCount: this._contextRefCount
+      })
+    }
+
     await this._closeContext(this.context)
     this.context = null
     this.page = null
@@ -591,7 +743,7 @@ export class LinkedInSmart {
       const browser = this.browser
       this.browser = null
       try { await browser.close() } catch {}
-      console.log('li_driver_browser_closed')
+      console.log('li_driver_browser_closed', { userId: this.userId })
     }
   }
 }
