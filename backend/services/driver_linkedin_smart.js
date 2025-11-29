@@ -353,36 +353,40 @@ export class LinkedInSmart {
       // Wait a moment for form to fully render
       await new Promise(r => setTimeout(r, 1500))
 
-      // Try multiple username field selectors with fallback
+      // Robust username field selector - catches any visible username/email input
       const userSelectors = [
-        'input#username',
-        'input[autocomplete="username"]',
+        'input#username:not([type="hidden"])',
         'input[name="session_key"]:not([type="hidden"])',
-        'input[type="text"][name="session_key"]'
+        'input[autocomplete="username"]:not([type="hidden"])',
+        'input[type="email"]:not([type="hidden"])',
+        'input[type="text"]:not([type="hidden"])'
       ]
       const userField = this.page.locator(userSelectors.join(', ')).first()
-      await userField.waitFor({ state: 'visible', timeout: 15000 })
+      await userField.waitFor({ state: 'visible', timeout: 30000 })
       await userField.click()
       await userField.fill(LI_USER)
 
-      // Try multiple password field selectors
+      console.log('li_login_username_filled', { userId: this.userId })
+
+      // Robust password field selector
       const passSelectors = [
-        'input#password',
-        'input[type="password"][autocomplete="current-password"]',
-        'input[name="session_password"]',
-        'input[type="password"]'
+        'input#password:not([type="hidden"])',
+        'input[name="session_password"]:not([type="hidden"])',
+        'input[type="password"]:not([type="hidden"])'
       ]
       const passField = this.page.locator(passSelectors.join(', ')).first()
-      await passField.waitFor({ state: 'visible', timeout: 15000 })
+      await passField.waitFor({ state: 'visible', timeout: 30000 })
       await passField.click()
       await passField.fill(LI_PASS)
 
       console.log('li_login_form_filled', { userId: this.userId })
 
-      // Click the sign in button
-      const loginButton = this.page.locator(
-        'button[type="submit"], button[aria-label*="Sign in"], button[data-litms-control-urn*="login-submit"]'
-      )
+      // Robust submit button selector
+      const loginButton = this.page.locator([
+        'button[type="submit"]',
+        'button[aria-label*="Sign in" i]',
+        'button:has-text("Sign in")'
+      ].join(', '))
       await loginButton.first().click()
 
       console.log('li_login_submitted', { userId: this.userId })
@@ -423,7 +427,7 @@ export class LinkedInSmart {
         })
       }
 
-      // Use the existing session state logic
+      // Use the existing session state logic to verify successful login
       const state = await this._sessionState()
       console.log('li_login_state_after_creds', {
         userId: this.userId,
@@ -432,6 +436,9 @@ export class LinkedInSmart {
       })
 
       if (!state.ok) {
+        // Capture screenshot on failure
+        await this._captureLoginErrorScreenshot(currentUrl, currentTitle, errorMessage)
+
         return {
           ok: false,
           reason: state.reason || 'post_login_not_ok',
@@ -441,7 +448,7 @@ export class LinkedInSmart {
         }
       }
 
-      // Logged in. Grab cookies from the Playwright context.
+      // Logged in successfully. Extract cookies from the Playwright context.
       const cookies = await this.context.cookies()
       this.cookies = cookies
 
@@ -458,6 +465,9 @@ export class LinkedInSmart {
       try { currentUrl = this.page?.url() || '' } catch {}
       try { currentTitle = await this.page?.title() } catch {}
 
+      // Capture screenshot on exception
+      await this._captureLoginErrorScreenshot(currentUrl, currentTitle, err?.message)
+
       console.error('li_login_with_creds_error', {
         userId: this.userId,
         error: String(err),
@@ -472,6 +482,33 @@ export class LinkedInSmart {
         url: currentUrl,
         title: currentTitle
       }
+    }
+  }
+
+  async _captureLoginErrorScreenshot(url, title, errorMessage) {
+    try {
+      if (!this.page) return
+
+      const timestamp = Date.now()
+      const screenshotPath = `/tmp/li_login_error_${this.userId || 'unknown'}_${timestamp}.png`
+
+      await this.page.screenshot({
+        path: screenshotPath,
+        fullPage: false
+      })
+
+      console.log('li_login_error_screenshot', {
+        userId: this.userId,
+        path: screenshotPath,
+        url,
+        title,
+        errorMessage: errorMessage || null
+      })
+    } catch (screenshotErr) {
+      console.warn('li_login_screenshot_failed', {
+        userId: this.userId,
+        error: String(screenshotErr)
+      })
     }
   }
 
