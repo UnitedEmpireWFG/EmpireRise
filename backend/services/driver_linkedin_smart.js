@@ -227,12 +227,17 @@ export class LinkedInSmart {
       feedControlVisible: false,
       feedVisible: false,
       loginFormInteractive: false,
+      loginRedirect: false,
+      signedOutForm: false,
       ok: false,
       reason: 'login_check_failed'
     }
 
     try { state.url = this.page.url() || '' } catch {}
     try { state.title = await this.page.title() } catch {}
+
+    // Check if URL indicates a login redirect
+    state.loginRedirect = /authwall|\/login|checkpoint|uas\/login/i.test(state.url)
 
     // Wait up to 12 seconds with smart polling for logged-in UI elements
     const LOGGED_IN_SELECTORS = [
@@ -268,18 +273,34 @@ export class LinkedInSmart {
       state.feedVisible = await this.page.locator('div.scaffold-layout__main, main.scaffold-layout__main').first().isVisible({ timeout: 1000 })
     } catch {}
 
-    // Only consider login form visible if it's actually interactive (not hidden)
+    // Check for login form presence (multiple selector strategies)
     try {
-      const loginForm = this.page.locator('form.login__form, div.login__form, input#username').first()
+      const loginSelectors = [
+        'form.login__form',
+        'div.login__form',
+        'input#username',
+        'input[name="session_key"]',
+        'input[autocomplete="username"]'
+      ]
+      const loginForm = this.page.locator(loginSelectors.join(', ')).first()
       const isVisible = await loginForm.isVisible({ timeout: 1000 })
       const isEnabled = isVisible ? await loginForm.isEnabled({ timeout: 500 }).catch(() => false) : false
       state.loginFormInteractive = isVisible && isEnabled
     } catch {}
 
-    // Session is OK if ANY logged-in UI is visible AND login form is NOT interactive
-    state.ok = !state.loginFormInteractive && (state.navVisible || state.avatarVisible || state.feedControlVisible || state.feedVisible)
+    // Also check for signed-out specific elements
+    try {
+      state.signedOutForm = await this.page.locator('input[name="session_key"], form#app__container').first().isVisible({ timeout: 1000 })
+    } catch {}
 
-    if (state.loginFormInteractive) state.reason = 'login_form_visible'
+    // Session is OK if ANY logged-in UI is visible AND we're NOT on a login page
+    state.ok = !state.loginRedirect && !state.loginFormInteractive && !state.signedOutForm &&
+               (state.navVisible || state.avatarVisible || state.feedControlVisible || state.feedVisible)
+
+    // Determine the reason
+    if (state.loginRedirect) state.reason = 'redirected_to_login'
+    else if (state.loginFormInteractive) state.reason = 'login_form_visible'
+    else if (state.signedOutForm) state.reason = 'signed_out_view'
     else if (state.ok) state.reason = 'ok'
     else state.reason = 'missing_logged_in_ui'
 
@@ -309,11 +330,16 @@ export class LinkedInSmart {
       return { ok: false, reason: 'missing_env_creds' }
     }
 
+    let currentUrl = ''
+    let currentTitle = ''
+
     try {
       // Ensure we have a page
       if (!this.page) {
         this.page = await this.context.newPage()
       }
+
+      console.log('li_login_starting', { userId: this.userId })
 
       // Go directly to the login page
       await this.page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded', timeout: 30000 })
@@ -327,22 +353,39 @@ export class LinkedInSmart {
       // Wait a moment for form to fully render
       await new Promise(r => setTimeout(r, 1500))
 
-      // Prefer input#username and input#password (visible fields)
-      const userField = this.page.locator('input#username, input[autocomplete="username"]').first()
+      // Try multiple username field selectors with fallback
+      const userSelectors = [
+        'input#username',
+        'input[autocomplete="username"]',
+        'input[name="session_key"]:not([type="hidden"])',
+        'input[type="text"][name="session_key"]'
+      ]
+      const userField = this.page.locator(userSelectors.join(', ')).first()
       await userField.waitFor({ state: 'visible', timeout: 15000 })
       await userField.click()
       await userField.fill(LI_USER)
 
-      const passField = this.page.locator('input#password, input[type="password"][autocomplete="current-password"]').first()
+      // Try multiple password field selectors
+      const passSelectors = [
+        'input#password',
+        'input[type="password"][autocomplete="current-password"]',
+        'input[name="session_password"]',
+        'input[type="password"]'
+      ]
+      const passField = this.page.locator(passSelectors.join(', ')).first()
       await passField.waitFor({ state: 'visible', timeout: 15000 })
       await passField.click()
       await passField.fill(LI_PASS)
+
+      console.log('li_login_form_filled', { userId: this.userId })
 
       // Click the sign in button
       const loginButton = this.page.locator(
         'button[type="submit"], button[aria-label*="Sign in"], button[data-litms-control-urn*="login-submit"]'
       )
       await loginButton.first().click()
+
+      console.log('li_login_submitted', { userId: this.userId })
 
       // Wait for navigation. Prefer feed, but do not hard fail if not exact.
       try {
@@ -352,12 +395,50 @@ export class LinkedInSmart {
         console.warn('li_login_wait_for_feed_timeout', { userId: this.userId, error: String(e) })
       }
 
+      // Capture current state for diagnostics
+      try { currentUrl = this.page.url() || '' } catch {}
+      try { currentTitle = await this.page.title() } catch {}
+
+      // Check for error messages on the page
+      let errorMessage = null
+      try {
+        const errorSelectors = [
+          '.form__label--error',
+          '.artdeco-inline-feedback--error',
+          'div[role="alert"]',
+          '.alert-danger'
+        ]
+        const errorEl = this.page.locator(errorSelectors.join(', ')).first()
+        if (await errorEl.isVisible({ timeout: 2000 })) {
+          errorMessage = await errorEl.textContent()
+        }
+      } catch {}
+
+      if (errorMessage) {
+        console.warn('li_login_error_message', {
+          userId: this.userId,
+          errorMessage: errorMessage.trim(),
+          url: currentUrl,
+          title: currentTitle
+        })
+      }
+
       // Use the existing session state logic
       const state = await this._sessionState()
-      console.log('li_login_state_after_creds', { userId: this.userId, state })
+      console.log('li_login_state_after_creds', {
+        userId: this.userId,
+        state,
+        errorMessage: errorMessage?.trim() || null
+      })
 
       if (!state.ok) {
-        return { ok: false, reason: state.reason || 'post_login_not_ok' }
+        return {
+          ok: false,
+          reason: state.reason || 'post_login_not_ok',
+          url: currentUrl,
+          title: currentTitle,
+          errorMessage: errorMessage?.trim() || null
+        }
       }
 
       // Logged in. Grab cookies from the Playwright context.
@@ -367,13 +448,30 @@ export class LinkedInSmart {
       // Persist cookies for future runs
       await this._persistCookies(cookies)
 
-      return { ok: true, reason: 'login_ok' }
+      console.log('li_login_success', {
+        userId: this.userId,
+        cookieCount: cookies.length
+      })
+
+      return { ok: true, reason: 'login_ok', url: currentUrl, title: currentTitle }
     } catch (err) {
+      try { currentUrl = this.page?.url() || '' } catch {}
+      try { currentTitle = await this.page?.title() } catch {}
+
       console.error('li_login_with_creds_error', {
         userId: this.userId,
         error: String(err),
+        message: err?.message,
+        url: currentUrl,
+        title: currentTitle
       })
-      return { ok: false, reason: 'exception', error: String(err) }
+      return {
+        ok: false,
+        reason: 'exception',
+        error: String(err),
+        url: currentUrl,
+        title: currentTitle
+      }
     }
   }
 
@@ -465,6 +563,23 @@ export class LinkedInSmart {
       }
 
       const sessionState = await this.hasValidLinkedInSession()
+
+      // Log session state details when not OK
+      if (!sessionState?.ok) {
+        console.log('li_session_check_failed', {
+          userId: this.userId,
+          url: sessionState?.url,
+          title: sessionState?.title,
+          reason: sessionState?.reason,
+          loginRedirect: sessionState?.loginRedirect,
+          loginFormInteractive: sessionState?.loginFormInteractive,
+          signedOutForm: sessionState?.signedOutForm,
+          navVisible: sessionState?.navVisible,
+          avatarVisible: sessionState?.avatarVisible,
+          feedVisible: sessionState?.feedVisible
+        })
+      }
+
       if (sessionState?.ok) {
         this.ready = true
         authFailureLogged.delete(this.userId)
@@ -474,12 +589,20 @@ export class LinkedInSmart {
         return
       }
 
-      // If cookies lead to login form, try credential login once
-      if (sessionState && sessionState.loginFormInteractive) {
+      // If cookies lead to login page or login form is visible, try credential login
+      const needsLogin = sessionState && (
+        sessionState.loginRedirect ||
+        sessionState.loginFormInteractive ||
+        sessionState.signedOutForm
+      )
+
+      if (needsLogin) {
         console.log('li_auth_cookies_login_redirect', {
           userId: this.userId,
           reason: sessionState.reason,
           url: sessionState.url,
+          loginRedirect: sessionState.loginRedirect,
+          loginFormInteractive: sessionState.loginFormInteractive
         })
 
         const loginResult = await this._loginWithCredentials()
@@ -487,6 +610,8 @@ export class LinkedInSmart {
           userId: this.userId,
           ok: loginResult.ok,
           reason: loginResult.reason,
+          url: loginResult.url || sessionState.url,
+          title: loginResult.title || sessionState.title
         })
 
         if (loginResult.ok) {
@@ -496,6 +621,15 @@ export class LinkedInSmart {
           const retryKey = this.userId || 'global'
           initRetryCount.delete(retryKey)
           return
+        } else {
+          // Log failure details
+          console.warn('li_login_failed_detail', {
+            userId: this.userId,
+            reason: loginResult.reason,
+            error: loginResult.error,
+            url: loginResult.url,
+            title: loginResult.title
+          })
         }
       }
 
